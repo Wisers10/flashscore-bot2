@@ -1,14 +1,17 @@
 import discord
 from discord.ext import commands, tasks
-import aiohttp
-import asyncio
+import requests
 from datetime import datetime, timedelta, time, timezone
+import asyncio
 import os
 
 # ================= CONFIGURAÇÕES =================
+# Certifica-te de que estas variáveis estão configuradas no Railway
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 API_KEY = os.getenv('API_KEY', '6d06a69f23msh5f3ad35148c8b68p1235b8jsnb94b0198382b')
 ID_CANAL_STR = os.getenv('ID_CANAL_NOTIFICACOES', '123456789012345678')
+
+# ID do canal de voz associado aos eventos (813485447719813207)
 ID_CANAL_VOZ_STR = os.getenv('ID_CANAL_VOZ', '813485447719813207') 
 
 if not DISCORD_TOKEN:
@@ -16,9 +19,6 @@ if not DISCORD_TOKEN:
     exit()
 
 ID_CANAL_NOTIFICACOES = int(ID_CANAL_STR)
-
-# Limita o número de pedidos simultâneos à API para evitar bloqueios (Rate Limit)
-api_semaphore = asyncio.Semaphore(5)
 
 EQUIPAS = {
     "benfica": {"id": 3006, "nome": "SL Benfica", "cor": 0xff0000},
@@ -60,18 +60,15 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
         return False
 
     try:
-        # Tenta obter eventos atuais com tratamento de erro de permissão (403 Forbidden)
-        try:
-            eventos_atuais = await guild.fetch_scheduled_events()
-        except discord.Forbidden:
-            print(f"🚫 Sem permissão para ler eventos em: {guild.name}")
-            return False
-
+        # Verifica se já existe um evento para este jogo
+        eventos_atuais = await guild.fetch_scheduled_events()
         for e in eventos_atuais:
             if e.name == nome_jogo and e.start_time.date() == data_inicio.date():
                 return False
 
         data_fim = data_inicio + timedelta(hours=2)
+
+        # Tenta obter o canal de voz configurado
         canal_voz = None
         if ID_CANAL_VOZ_STR:
             try:
@@ -79,7 +76,7 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
             except:
                 canal_voz = None
 
-        if canal_voz and isinstance(canal_voz, discord.VoiceChannel):
+        if canal_voz:
             await guild.create_scheduled_event(
                 name=nome_jogo,
                 description=f"🏆 {liga} - Vamos comentar o jogo em direto no canal de voz!",
@@ -105,66 +102,56 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
         print(f"❌ Erro ao criar evento {nome_jogo}: {e}")
         return False
 
-# ================= FUNÇÕES DE API (OTIMIZADAS) =================
+# ================= FUNÇÕES DE API =================
 
-async def buscar_jogos_async(session, team_id, nome_equipa="Equipa"):
-    """Busca eventos de forma assíncrona respeitando o semáforo"""
+def buscar_jogos_sofasport(team_id):
     url = "https://sofasport.p.rapidapi.com/v1/teams/events"
     params = {"team_id": str(team_id), "course_events": "next", "page": "0"}
-    
-    async with api_semaphore:
-        try:
-            async with session.get(url, params=params, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data.get("data", {}).get("events", [])
-                elif response.status == 429:
-                    print(f"⚠️ Rate limit atingido para {nome_equipa}")
-                return []
-        except Exception as e:
-            print(f"❌ Erro ao buscar {nome_equipa}: {e}")
-            return []
+    try:
+        r = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        if r.status_code == 200:
+            return r.json().get("data", {}).get("events", [])
+        return []
+    except:
+        return []
 
 # ================= AGENDAS E TAREFAS =================
 
 async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo):
     msg = None
     if isinstance(canal_ou_ctx, commands.Context):
-        msg = await canal_ou_ctx.send(f"🚀 A consultar a agenda para {titulo} (Modo Rápido)...")
+        msg = await canal_ou_ctx.send(f"🔍 A consultar a agenda para {titulo}...")
     
     embed = discord.Embed(title=f"⚽ Agenda: {titulo}", color=0xf1c40f)
     encontrou = False
     
-    async with aiohttp.ClientSession(headers=HEADERS) as session:
-        # Prepara todos os pedidos para correrem em paralelo
-        tarefas = [buscar_jogos_async(session, info["id"], info["nome"]) for info in EQUIPAS.values()]
-        resultados = await asyncio.gather(*tarefas)
+    for chave, info in EQUIPAS.items():
+        # Busca síncrona simples (como estava na versão estável)
+        eventos = buscar_jogos_sofasport(info["id"])
+        for j in eventos:
+            ts = j.get("startTimestamp")
+            if ts:
+                dt_jogo = datetime.fromtimestamp(ts, tz=timezone.utc)
+                if dt_jogo.date() == data_alvo:
+                    encontrou = True
+                    home = j.get("homeTeam", {}).get("name", "N/A")
+                    away = j.get("awayTeam", {}).get("name", "N/A")
+                    liga_nome = j.get("tournament", {}).get("name", "Competição")
+                    nome_jogo = f"{home} vs {away}"
 
-        # Processa os resultados
-        for (chave, info), eventos in zip(EQUIPAS.items(), resultados):
-            for j in eventos:
-                ts = j.get("startTimestamp")
-                if ts:
-                    dt_jogo = datetime.fromtimestamp(ts, tz=timezone.utc)
-                    if dt_jogo.date() == data_alvo:
-                        encontrou = True
-                        home = j.get("homeTeam", {}).get("name", "N/A")
-                        away = j.get("awayTeam", {}).get("name", "N/A")
-                        liga_nome = j.get("tournament", {}).get("name", "Competição")
-                        nome_jogo = f"{home} vs {away}"
+                    # Cria o evento no Discord
+                    if canal_ou_ctx.guild:
+                        await criar_evento_discord(canal_ou_ctx.guild, nome_jogo, dt_jogo, liga_nome)
 
-                        # Cria o evento no Discord
-                        if canal_ou_ctx.guild:
-                            await criar_evento_discord(canal_ou_ctx.guild, nome_jogo, dt_jogo, liga_nome)
-
-                        hora_f = dt_jogo.strftime('%H:%M') if not (dt_jogo.hour == 12 and dt_jogo.minute == 0) else dt_jogo.strftime('%d/%m (TBD)')
-                        
-                        embed.add_field(
-                            name=f"🥅 {info['nome']}",
-                            value=f"🏆 {liga_nome}\n🕒 **{hora_f}**\n**{home}** vs **{away}**",
-                            inline=False
-                        )
-                        break
+                    hora_f = dt_jogo.strftime('%H:%M') if not (dt_jogo.hour == 12 and dt_jogo.minute == 0) else dt_jogo.strftime('%d/%m (TBD)')
+                    
+                    embed.add_field(
+                        name=f"🥅 {info['nome']}",
+                        value=f"🏆 {liga_nome}\n🕒 **{hora_f}**\n**{home}** vs **{away}**",
+                        inline=False
+                    )
+                    break
+        await asyncio.sleep(0.5) # Pequena pausa para não bloquear o bot
 
     if not encontrou:
         aviso = f"📅 Não foram encontrados jogos para {titulo}."
@@ -195,25 +182,23 @@ async def amanha(ctx):
 @bot.command()
 async def comandos(ctx):
     embed = discord.Embed(title="📖 Guia de Comandos", color=0x3498db)
-    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha` (Rápido e Automático)", inline=False)
+    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha` (Cria eventos automaticamente)", inline=False)
     embed.add_field(name="⚽ Equipas", value=", ".join([f"!{k}" for k in EQUIPAS.keys()]), inline=False)
     await ctx.send(embed=embed)
 
-# Comandos de equipa otimizados
+# Comandos de equipa simplificados
 async def cmd_equipa(ctx, chave):
     info = EQUIPAS[chave]
-    await ctx.send(f"🔍 A consultar agenda do **{info['nome']}**...")
-    async with aiohttp.ClientSession(headers=HEADERS) as session:
-        eventos = await buscar_jogos_async(session, info["id"], info["nome"])
-        if not eventos: return await ctx.send(f"⚠️ Sem jogos para {info['nome']}.")
-        
-        embed = discord.Embed(title=f"🥅 Próximos Jogos: {info['nome']}", color=info["cor"])
-        for j in eventos[:3]:
-            ts = j.get("startTimestamp")
-            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-            dt_f = dt.strftime('%d/%m %H:%M') if not (dt.hour == 12 and dt.minute == 0) else dt.strftime('%d/%m (TBD)')
-            embed.add_field(name=f"🏆 {j.get('tournament', {}).get('name')}", value=f"📅 `{dt_f}`\n**{j['homeTeam']['name']}** vs **{j['awayTeam']['name']}**", inline=False)
-        await ctx.send(embed=embed)
+    eventos = buscar_jogos_sofasport(info["id"])
+    if not eventos: return await ctx.send(f"⚠️ Sem jogos para {info['nome']}.")
+    
+    embed = discord.Embed(title=f"🥅 Próximos Jogos: {info['nome']}", color=info["cor"])
+    for j in eventos[:3]:
+        ts = j.get("startTimestamp")
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        dt_f = dt.strftime('%d/%m %H:%M') if not (dt.hour == 12 and dt.minute == 0) else dt.strftime('%d/%m (TBD)')
+        embed.add_field(name=f"🏆 {j.get('tournament', {}).get('name')}", value=f"📅 `{dt_f}`\n**{j['homeTeam']['name']}** vs **{j['awayTeam']['name']}**", inline=False)
+    await ctx.send(embed=embed)
 
 @bot.command()
 async def benfica(ctx): await cmd_equipa(ctx, "benfica")
@@ -225,10 +210,11 @@ async def sporting(ctx): await cmd_equipa(ctx, "sporting")
 async def psg(ctx): await cmd_equipa(ctx, "psg")
 @bot.command()
 async def bayern(ctx): await cmd_equipa(ctx, "bayern")
+# ... podes adicionar os outros conforme necessário
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot Online e Otimizado: {bot.user}')
+    print(f'✅ Bot Online e Estável: {bot.user}')
     if not notificacao_diaria.is_running():
         notificacao_diaria.start()
 
