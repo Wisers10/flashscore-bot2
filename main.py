@@ -10,6 +10,9 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 API_KEY = os.getenv('API_KEY', '6d06a69f23msh5f3ad35148c8b68p1235b8jsnb94b0198382b')
 ID_CANAL_STR = os.getenv('ID_CANAL_NOTIFICACOES', '123456789012345678')
 
+# ID do canal de voz associado aos eventos (ID fornecido: 813485447719813207)
+ID_CANAL_VOZ_STR = os.getenv('ID_CANAL_VOZ', '813485447719813207') 
+
 if not DISCORD_TOKEN:
     print("❌ ERRO: DISCORD_TOKEN não encontrado.")
     exit()
@@ -36,7 +39,7 @@ EQUIPAS = {
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guild_scheduled_events = True # NOVA INTENT NECESSÁRIA
+intents.guild_scheduled_events = True 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 HEADERS = {
@@ -47,29 +50,53 @@ HEADERS = {
 # ================= FUNÇÕES DE EVENTOS DO DISCORD =================
 
 async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
-    """Cria um evento agendado no servidor se ele ainda não existir"""
-    # Verifica se já existe um evento com o mesmo nome para evitar duplicados
+    """Cria um evento agendado no servidor num canal de voz ou externo"""
+    if data_inicio.tzinfo is None:
+        data_inicio = data_inicio.replace(tzinfo=timezone.utc)
+
+    agora = datetime.now(timezone.utc)
+    if data_inicio < agora or (data_inicio.hour == 12 and data_inicio.minute == 0):
+        return
+
     eventos_atuais = await guild.fetch_scheduled_events()
     for e in eventos_atuais:
-        if e.name == nome_jogo and e.start_time.date() == data_inicio.date():
-            return # Já existe
+        if e.name == nome_jogo and abs((e.start_time - data_inicio).total_seconds()) < 3600:
+            return 
 
-    # Define fim do evento (2h depois do início)
     data_fim = data_inicio + timedelta(hours=2)
 
+    # Tenta obter o canal de voz configurado
+    canal_voz = None
+    if ID_CANAL_VOZ_STR:
+        try:
+            canal_voz = guild.get_channel(int(ID_CANAL_VOZ_STR))
+        except:
+            canal_voz = None
+
     try:
-        await guild.create_scheduled_event(
-            name=nome_jogo,
-            description=f"🏆 {liga} - Acompanha o jogo aqui no servidor!",
-            start_time=data_inicio,
-            end_time=data_fim,
-            entity_type=discord.EntityType.external,
-            location="Campo de Futebol / TV",
-            privacy_level=discord.PrivacyLevel.guild_only
-        )
+        if canal_voz:
+            await guild.create_scheduled_event(
+                name=nome_jogo,
+                description=f"🏆 {liga} - Vamos comentar o jogo em direto no canal de voz!",
+                start_time=data_inicio,
+                end_time=data_fim,
+                entity_type=discord.EntityType.voice,
+                channel=canal_voz,
+                privacy_level=discord.PrivacyLevel.guild_only
+            )
+        else:
+            await guild.create_scheduled_event(
+                name=nome_jogo,
+                description=f"🏆 {liga} - Acompanha o jogo!",
+                start_time=data_inicio,
+                end_time=data_fim,
+                entity_type=discord.EntityType.external,
+                location="Televisão / Estádio",
+                privacy_level=discord.PrivacyLevel.guild_only
+            )
         print(f"✅ Evento criado: {nome_jogo}")
     except Exception as e:
-        print(f"❌ Erro ao criar evento: {e}")
+        print(f"❌ Erro ao criar evento {nome_jogo}: {e}")
 
 # ================= FUNÇÕES DE API =================
 
@@ -84,15 +111,41 @@ def buscar_jogos_sofasport(team_id):
     except:
         return []
 
-async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, criar_eventos=False):
+async def sincronizar_todos_os_eventos(guild):
+    if not guild: return
+    print(f"🔄 Sincronizando eventos para: {guild.name}")
+    for chave, info in EQUIPAS.items():
+        eventos = buscar_jogos_sofasport(info["id"])
+        for j in eventos:
+            ts = j.get("startTimestamp")
+            if ts:
+                dt_jogo = datetime.fromtimestamp(ts, tz=timezone.utc)
+                home = j.get("homeTeam", {}).get("name", "N/A")
+                away = j.get("awayTeam", {}).get("name", "N/A")
+                liga_nome = j.get("tournament", {}).get("name", "Competição")
+                nome_jogo = f"{home} vs {away}"
+                await criar_evento_discord(guild, nome_jogo, dt_jogo, liga_nome)
+        await asyncio.sleep(1)
+
+# ================= TAREFAS E COMANDOS =================
+
+@tasks.loop(hours=6)
+async def task_sincronizacao_global():
+    for guild in bot.guilds:
+        await sincronizar_todos_os_eventos(guild)
+
+@tasks.loop(time=time(hour=9, minute=0, tzinfo=timezone.utc))
+async def notificacao_diaria():
+    canal = bot.get_channel(ID_CANAL_NOTIFICACOES)
+    if canal:
+        hoje_data = datetime.now(timezone.utc).date()
+        await gerar_agenda_data(canal, hoje_data, "Hoje")
+
+async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo):
     msg = None
-    guild = None
     if isinstance(canal_ou_ctx, commands.Context):
         msg = await canal_ou_ctx.send(f"🔍 A consultar a agenda para {titulo}...")
-        guild = canal_ou_ctx.guild
-    else:
-        guild = canal_ou_ctx.guild # No caso da task automática
-
+    
     embed = discord.Embed(title=f"⚽ Agenda: {titulo}", color=0xf1c40f)
     encontrou = False
     
@@ -104,20 +157,10 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, criar_eventos=False
                 dt_jogo = datetime.fromtimestamp(ts, tz=timezone.utc)
                 if dt_jogo.date() == data_alvo:
                     encontrou = True
-                    
                     home = j.get("homeTeam", {}).get("name", "N/A")
                     away = j.get("awayTeam", {}).get("name", "N/A")
                     liga_nome = j.get("tournament", {}).get("name", "Competição")
-                    nome_jogo = f"{home} vs {away}"
-
-                    # Criação de evento no Discord (se a hora não for TBD/12h00)
-                    if criar_eventos and guild and not (dt_jogo.hour == 12 and dt_jogo.minute == 0):
-                        await criar_evento_discord(guild, nome_jogo, dt_jogo, liga_nome)
-
-                    if dt_jogo.hour == 12 and dt_jogo.minute == 0:
-                        hora_f = dt_jogo.strftime('%d/%m (Hora a definir)')
-                    else:
-                        hora_f = dt_jogo.strftime('%H:%M')
+                    hora_f = dt_jogo.strftime('%H:%M') if not (dt_jogo.hour == 12 and dt_jogo.minute == 0) else dt_jogo.strftime('%d/%m (TBD)')
                     
                     embed.add_field(
                         name=f"🥅 {info['nome']}",
@@ -128,44 +171,33 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, criar_eventos=False
         await asyncio.sleep(0.4)
 
     if not encontrou:
-        if msg: await msg.edit(content=f"📅 Não foram encontrados jogos das tuas equipas para {titulo}.")
+        if msg: await msg.edit(content=f"📅 Sem jogos para {titulo}.")
     else:
         if msg: await msg.edit(content=None, embed=embed)
         else: await canal_ou_ctx.send(embed=embed)
 
-# ================= TAREFAS E COMANDOS =================
-
-@tasks.loop(time=time(hour=9, minute=0, tzinfo=timezone.utc))
-async def notificacao_diaria():
-    canal = bot.get_channel(ID_CANAL_NOTIFICACOES)
-    if canal:
-        hoje_data = datetime.now(timezone.utc).date()
-        # Aqui ativamos o criar_eventos=True
-        await gerar_agenda_data(canal, hoje_data, "Hoje", criar_eventos=True)
+@bot.command()
+async def hoje(ctx): await gerar_agenda_data(ctx, datetime.now(timezone.utc).date(), "Hoje")
 
 @bot.command()
-async def hoje(ctx):
-    await gerar_agenda_data(ctx, datetime.now(timezone.utc).date(), "Hoje", criar_eventos=True)
-
-@bot.command()
-async def amanha(ctx):
-    await gerar_agenda_data(ctx, (datetime.now(timezone.utc) + timedelta(days=1)).date(), "Amanhã", criar_eventos=True)
-
-# ... (restante dos comandos como !liga e !benfica permanecem iguais)
+async def sincronizar(ctx):
+    await ctx.send("🔄 A sincronizar eventos no canal de voz... Isto pode demorar.")
+    await sincronizar_todos_os_eventos(ctx.guild)
+    await ctx.send("✅ Sincronização concluída!")
 
 @bot.command()
 async def comandos(ctx):
     embed = discord.Embed(title="📖 Guia de Comandos", color=0x3498db)
-    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha` (Estes criam eventos no Discord)", inline=False)
-    embed.add_field(name="🏆 Ligas", value="`!liga`, `!premier`", inline=False)
-    embed.add_field(name="⚽ Equipas", value=", ".join([f"!{k}" for k in EQUIPAS.keys()]), inline=False)
+    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha`", inline=False)
+    embed.add_field(name="🔄 Eventos", value="`!sincronizar` - Força a criação de eventos no canal de voz.", inline=False)
     await ctx.send(embed=embed)
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot Online com suporte a Eventos!')
-    if not notificacao_diaria.is_running():
-        notificacao_diaria.start()
+    print(f'✅ Bot Online e Pronto!')
+    if not notificacao_diaria.is_running(): notificacao_diaria.start()
+    if not task_sincronizacao_global.is_running(): task_sincronizacao_global.start()
+    for guild in bot.guilds: asyncio.create_task(sincronizar_todos_os_eventos(guild))
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
