@@ -38,7 +38,8 @@ EQUIPAS = {
     "bayern": {"id": 2672, "nome": "Bayern Munich", "cor": 0xDC052D}
 }
 
-IDS_AUTORIZADOS = {info["id"] for info in EQUIPAS.values()}
+# IDs como inteiros para comparação segura
+IDS_AUTORIZADOS = {int(info["id"]) for info in EQUIPAS.values()}
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -53,10 +54,10 @@ HEADERS = {
 # ================= FUNÇÕES DE EVENTOS DO DISCORD =================
 
 async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
-    # Converter para PT para exibição correta
     data_inicio_pt = data_inicio.astimezone(TZ_PT)
     agora_pt = datetime.now(TZ_PT)
 
+    # Ignora jogos passados ou sem hora definida (12h UTC / 13h PT costuma ser placeholder)
     if data_inicio_pt < agora_pt or (data_inicio_pt.hour == 13 and data_inicio_pt.minute == 0):
         return False
 
@@ -108,28 +109,27 @@ def buscar_agenda_dia(data_str, retries=2):
     for i in range(retries + 1):
         print(f"🌐 [API] A consultar todos os jogos do dia: {data_str} (Tentativa {i+1})")
         try:
-            # Aumentamos o timeout para 30 segundos
             r = requests.get(url, headers=HEADERS, params=params, timeout=30)
             if r.status_code == 200:
                 data = r.json()
+                lista_jogos = []
                 if isinstance(data, list):
-                    return data
-                if isinstance(data, dict):
-                    return data.get("events", []) or data.get("data", {}).get("events", [])
+                    lista_jogos = data
+                elif isinstance(data, dict):
+                    lista_jogos = data.get("events", []) or data.get("data", {}).get("events", [])
+                
+                print(f"📊 [API] Recebidos {len(lista_jogos)} jogos totais da API.")
+                return lista_jogos
+            
             elif r.status_code == 429:
                 print(f"⚠️ [API] Rate Limit. A esperar 5s...")
                 import time
                 time.sleep(5)
                 continue
-        except requests.exceptions.Timeout:
-            print(f"⚠️ [API] Tempo de espera esgotado na tentativa {i+1}.")
-            if i < retries:
-                import time
-                time.sleep(2)
-                continue
         except Exception as e:
-            print(f"❌ [API] Falha crítica: {e}")
-            break
+            print(f"❌ [API] Falha na tentativa {i+1}: {e}")
+            if i < retries: asyncio.sleep(2)
+            
     return []
 
 def buscar_jogos_equipa(team_id, retries=1):
@@ -159,7 +159,7 @@ async def processar_agenda(canal_ou_ctx, data_obj, titulo):
     eventos_dia = buscar_agenda_dia(data_str)
     
     if not eventos_dia:
-        aviso = f"📅 Não foi possível obter jogos da API para {titulo} (Lentidão ou sem jogos)."
+        aviso = f"📅 Não foi possível obter jogos para {titulo}. Verifica os logs."
         if msg: await msg.edit(content=aviso)
         else: await canal_ou_ctx.send(aviso)
         return
@@ -168,13 +168,17 @@ async def processar_agenda(canal_ou_ctx, data_obj, titulo):
     encontrou = False
     
     for j in eventos_dia:
-        if not isinstance(j, dict):
-            continue
+        if not isinstance(j, dict): continue
 
         home = j.get("homeTeam", {})
         away = j.get("awayTeam", {})
-        home_id = home.get("id")
-        away_id = away.get("id")
+        
+        # Converte IDs para int para garantir comparação
+        try:
+            home_id = int(home.get("id", 0))
+            away_id = int(away.get("id", 0))
+        except:
+            continue
         
         if home_id in IDS_AUTORIZADOS or away_id in IDS_AUTORIZADOS:
             encontrou = True
@@ -192,7 +196,7 @@ async def processar_agenda(canal_ou_ctx, data_obj, titulo):
             embed.add_field(name=f"🥅 {nome_jogo}", value=f"🏆 {liga}\n🕒 **{hora_f}**", inline=False)
 
     if not encontrou:
-        aviso = f"📅 Nenhuma das tuas equipas joga em {titulo}."
+        aviso = f"📅 Nenhuma das tuas equipas joga em {titulo}. (Total de {len(eventos_dia)} jogos analisados)"
         if msg: await msg.edit(content=aviso)
         else: await canal_ou_ctx.send(aviso)
     else:
