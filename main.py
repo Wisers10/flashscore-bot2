@@ -98,8 +98,8 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
 
 def buscar_agenda_dia(data_str):
     """
-    Usa o novo endpoint: /match/list?date=YYYY-MM-DD
-    Fabuloso para evitar Rate Limits!
+    Endpoint: /match/list?date=YYYY-MM-DD
+    Correção: Lida com respostas que são listas ou dicionários.
     """
     url = "https://sofascore6.p.rapidapi.com/api/sofascore/v1/match/list"
     params = {"date": data_str, "sport_slug": "football"}
@@ -107,7 +107,13 @@ def buscar_agenda_dia(data_str):
     try:
         r = requests.get(url, headers=HEADERS, params=params, timeout=15)
         if r.status_code == 200:
-            return r.json().get("events", [])
+            data = r.json()
+            # Se a API devolver uma lista direta, retornamos a lista.
+            # Se devolver um dicionário, tentamos a chave 'events'.
+            if isinstance(data, list):
+                return data
+            return data.get("events", [])
+            
         print(f"⚠️ [API] Erro {r.status_code} na agenda diária.")
         return []
     except Exception as e:
@@ -120,7 +126,11 @@ def buscar_jogos_equipa(team_id):
     params = {"id": str(team_id)}
     try:
         r = requests.get(url, headers=HEADERS, params=params, timeout=10)
-        return r.json().get("events", []) if r.status_code == 200 else []
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list): return data
+            return data.get("events", [])
+        return []
     except:
         return []
 
@@ -144,21 +154,22 @@ async def processar_agenda(canal_ou_ctx, data_obj, titulo):
     encontrou = False
     
     for j in eventos_dia:
-        home_id = j.get("homeTeam", {}).get("id")
-        away_id = j.get("awayTeam", {}).get("id")
+        # Algumas APIs usam estruturas ligeiramente diferentes para homeTeam/awayTeam
+        home = j.get("homeTeam", {})
+        away = j.get("awayTeam", {})
+        home_id = home.get("id")
+        away_id = away.get("id")
         
-        # Verifica se alguma das nossas equipas está a jogar (como Visitado ou Visitante)
+        # Verifica se alguma das nossas equipas está a jogar
         if home_id in IDS_AUTORIZADOS or away_id in IDS_AUTORIZADOS:
             encontrou = True
             ts = j.get("startTimestamp")
             dt_jogo = datetime.fromtimestamp(ts, tz=timezone.utc)
             
-            home_name = j.get("homeTeam", {}).get("name", "N/A")
-            away_name = j.get("awayTeam", {}).get("name", "N/A")
+            nome_jogo = f"{home.get('name', 'N/A')} vs {away.get('name', 'N/A')}"
             liga = j.get("tournament", {}).get("name", "Competição")
-            nome_jogo = f"{home_name} vs {away_name}"
 
-            # Criar evento automático
+            # Criar evento automático se estiver num servidor
             if canal_ou_ctx.guild:
                 await criar_evento_discord(canal_ou_ctx.guild, nome_jogo, dt_jogo, liga)
 
@@ -209,11 +220,15 @@ async def cmd_equipa(ctx, chave):
     if not eventos: return await ctx.send(f"📅 Sem jogos agendados.")
     
     embed = discord.Embed(title=f"🥅 Agenda: {info['nome']}", color=info["cor"])
-    for j in eventos[:3]:
+    count = 0
+    for j in eventos:
+        if count >= 3: break
         ts = j.get("startTimestamp")
+        if not ts: continue
         dt = datetime.fromtimestamp(ts, tz=timezone.utc)
         hora = dt.strftime('%d/%m %H:%M') if not (dt.hour == 12 and dt.minute == 0) else dt.strftime('%d/%m (TBD)')
-        embed.add_field(name=f"🏆 {j.get('tournament',{}).get('name')}", value=f"🕒 {hora}\n**{j['homeTeam']['name']}** vs **{j['awayTeam']['name']}**", inline=False)
+        embed.add_field(name=f"🏆 {j.get('tournament',{}).get('name')}", value=f"🕒 {hora}\n**{j.get('homeTeam',{}).get('name')}** vs **{j.get('awayTeam',{}).get('name')}**", inline=False)
+        count += 1
     await ctx.send(embed=embed)
 
 @bot.command()
