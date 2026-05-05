@@ -18,7 +18,6 @@ if not DISCORD_TOKEN:
 ID_CANAL_NOTIFICACOES = int(ID_CANAL_STR)
 
 # Semáforo para limitar pedidos simultâneos (Evita erro 429 da API)
-# Permite apenas 5 pedidos ao mesmo tempo
 api_semaphore = asyncio.Semaphore(5)
 
 EQUIPAS = {
@@ -56,34 +55,42 @@ async def buscar_jogos_async(session, team_id):
     url = "https://sofasport.p.rapidapi.com/v1/teams/events"
     params = {"team_id": str(team_id), "course_events": "next", "page": "0"}
     
-    async with api_semaphore: # Espera a sua vez se já houver 5 pedidos a correr
+    async with api_semaphore:
         try:
             async with session.get(url, params=params, timeout=10) as response:
                 if response.status == 200:
                     data = await response.json()
                     return data.get("data", {}).get("events", [])
                 elif response.status == 429:
-                    print(f"⚠️ Rate limit atingido para ID {team_id}. A aguardar...")
-                    await asyncio.sleep(2) # Pequena pausa se a API reclamar
+                    print(f"⚠️ Rate limit atingido para ID {team_id}.")
+                    await asyncio.sleep(2)
                 return []
         except Exception as e:
-            print(f"Erro ao buscar equipa {team_id}: {e}")
+            print(f"❌ Erro ao buscar equipa {team_id}: {e}")
             return []
 
 # ================= FUNÇÕES DE EVENTOS DO DISCORD =================
 
 async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
+    """Cria o evento e retorna True se criado, False caso contrário"""
     if data_inicio.tzinfo is None:
         data_inicio = data_inicio.replace(tzinfo=timezone.utc)
 
     agora = datetime.now(timezone.utc)
-    if data_inicio < agora or (data_inicio.hour == 12 and data_inicio.minute == 0):
-        return
+    
+    # Filtro: Ignorar jogos no passado ou com hora placeholder (12:00 UTC)
+    if data_inicio < agora:
+        return False
+    if data_inicio.hour == 12 and data_inicio.minute == 0:
+        # Podes comentar esta linha se quiseres criar eventos mesmo sem hora confirmada
+        return False
 
+    # Verificar se já existe
     eventos_atuais = await guild.fetch_scheduled_events()
     for e in eventos_atuais:
-        if e.name == nome_jogo and abs((e.start_time - data_inicio).total_seconds()) < 3600:
-            return 
+        # Consideramos duplicado se tiver o mesmo nome e ocorrer no mesmo dia
+        if e.name == nome_jogo and e.start_time.date() == data_inicio.date():
+            return False
 
     data_fim = data_inicio + timedelta(hours=2)
     canal_voz = guild.get_channel(int(ID_CANAL_VOZ_STR)) if ID_CANAL_VOZ_STR else None
@@ -109,14 +116,20 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
                 location="Televisão / Estádio",
                 privacy_level=discord.PrivacyLevel.guild_only
             )
+        print(f"✅ Evento criado com sucesso: {nome_jogo}")
+        return True
     except Exception as e:
         print(f"❌ Erro ao criar evento {nome_jogo}: {e}")
+        return False
 
 # ================= SINCRONIZAÇÃO EM MASSA =================
 
 async def sincronizar_todos_os_eventos(guild):
-    if not guild: return
-    print(f"🔄 Sincronização controlada iniciada para: {guild.name}")
+    """Retorna o número de novos eventos criados"""
+    if not guild: return 0
+    
+    contador_criados = 0
+    print(f"🔄 Sincronização iniciada para: {guild.name}")
     
     async with aiohttp.ClientSession(headers=HEADERS) as session:
         tarefas = [buscar_jogos_async(session, info["id"]) for info in EQUIPAS.values()]
@@ -130,7 +143,12 @@ async def sincronizar_todos_os_eventos(guild):
                     home = j.get("homeTeam", {}).get("name", "N/A")
                     away = j.get("awayTeam", {}).get("name", "N/A")
                     liga_nome = j.get("tournament", {}).get("name", "Competição")
-                    await criar_evento_discord(guild, f"{home} vs {away}", dt_jogo, liga_nome)
+                    
+                    criou = await criar_evento_discord(guild, f"{home} vs {away}", dt_jogo, liga_nome)
+                    if criou:
+                        contador_criados += 1
+    
+    return contador_criados
 
 # ================= TAREFAS E COMANDOS =================
 
@@ -147,7 +165,7 @@ async def notificacao_diaria():
         await gerar_agenda_data(canal, hoje_data, "Hoje")
 
 async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo):
-    msg = await canal_ou_ctx.send(f"🚀 A processar agenda para {titulo} (Modo Otimizado)...") if isinstance(canal_ou_ctx, commands.Context) else None
+    msg = await canal_ou_ctx.send(f"🚀 A processar agenda para {titulo}...") if isinstance(canal_ou_ctx, commands.Context) else None
     
     embed = discord.Embed(title=f"⚽ Agenda: {titulo}", color=0xf1c40f)
     encontrou = False
@@ -191,23 +209,25 @@ async def hoje(ctx): await gerar_agenda_data(ctx, datetime.now(timezone.utc).dat
 
 @bot.command()
 async def sincronizar(ctx):
-    await ctx.send("🚀 Sincronização segura iniciada...")
-    await sincronizar_todos_os_eventos(ctx.guild)
-    await ctx.send("✅ Sincronização concluída com sucesso!")
+    msg = await ctx.send("🚀 A verificar jogos futuros e a sincronizar eventos...")
+    novos = await sincronizar_todos_os_eventos(ctx.guild)
+    if novos > 0:
+        await msg.edit(content=f"✅ Sincronização concluída! Foram adicionados **{novos}** novos eventos à lista.")
+    else:
+        await msg.edit(content="ℹ️ Sincronização concluída. Não foram encontrados novos jogos com horário confirmado para adicionar.")
 
 @bot.command()
 async def comandos(ctx):
     embed = discord.Embed(title="📖 Guia de Comandos", color=0x3498db)
     embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha`", inline=False)
-    embed.add_field(name="🔄 Eventos", value="`!sincronizar` - Atualiza eventos de forma segura.", inline=False)
+    embed.add_field(name="🔄 Eventos", value="`!sincronizar` - Atualiza a lista de eventos agendados.", inline=False)
     await ctx.send(embed=embed)
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot Online e com Proteção de Rate Limit!')
+    print(f'✅ Bot Online e Otimizado!')
     if not notificacao_diaria.is_running(): notificacao_diaria.start()
     if not task_sincronizacao_global.is_running(): task_sincronizacao_global.start()
-    for guild in bot.guilds: asyncio.create_task(sincronizar_todos_os_eventos(guild))
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
