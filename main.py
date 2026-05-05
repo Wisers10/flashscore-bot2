@@ -46,11 +46,18 @@ intents.message_content = True
 intents.guild_scheduled_events = True 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Host atualizado para o que aparece no teu painel
+# Host atualizado para o que aparece no teu painel (sofascore6)
 HEADERS = {
     'x-rapidapi-host': "sofascore6.p.rapidapi.com",
     'x-rapidapi-key': API_KEY
 }
+
+# ================= FILTRO DE PRIVACIDADE =================
+
+@bot.check
+async def is_guild_allowed(ctx):
+    if not ALLOWED_GUILDS: return True
+    return ctx.guild and ctx.guild.id in ALLOWED_GUILDS
 
 # ================= FUNÇÕES DE EVENTOS DO DISCORD =================
 
@@ -63,7 +70,13 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
         return False
 
     try:
-        eventos_atuais = await guild.fetch_scheduled_events()
+        # Tratamento de erro 403 (Missing Access) ao ler eventos
+        try:
+            eventos_atuais = await guild.fetch_scheduled_events()
+        except discord.Forbidden:
+            print(f"🚫 [EVENTO] Sem permissão para ler eventos no servidor: {guild.name}")
+            return False
+
         for e in eventos_atuais:
             if e.name == nome_jogo and e.start_time.date() == data_inicio.date():
                 return False
@@ -96,39 +109,41 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
                 location="Televisão / Estádio",
                 privacy_level=discord.PrivacyLevel.guild_only
             )
-        print(f"✅ [EVENTO] Criado: {nome_jogo}")
+        print(f"✅ [EVENTO] Criado: {nome_jogo} em {guild.name}")
         return True
     except Exception as e:
-        print(f"❌ [ERRO] Falha ao criar evento {nome_jogo}: {e}")
+        print(f"❌ [ERRO EVENTO] Falha ao criar {nome_jogo}: {e}")
         return False
 
 # ================= FUNÇÕES DE API =================
 
 def buscar_jogos_sofasport(team_id, nome_equipa="Equipa", retries=3):
     """
-    Endpoint corrigido para o Host sofascore6.
-    Baseado na estrutura da API sofascore6 que utiliza o caminho /api/sofascore/v1/team/{id}/events
+    Endpoint corrigido especificamente para o Host sofascore6.
+    Estrutura: /api/sofascore/v1/team/{id}/events/next/0
     """
-    url = f"https://sofascore6.p.rapidapi.com/api/sofascore/v1/team/{team_id}/events"
-    # A maioria das APIs do Sofascore usa o parâmetro 'type' ou devolve os próximos eventos por defeito
-    params = {"course_events": "next", "page": "0"}
+    url = f"https://sofascore6.p.rapidapi.com/api/sofascore/v1/team/{team_id}/events/next/0"
     
     for i in range(retries):
         print(f"🌐 [API] A consultar: {nome_equipa} (Tentativa {i+1})")
         try:
-            r = requests.get(url, headers=HEADERS, params=params, timeout=10)
+            r = requests.get(url, headers=HEADERS, timeout=10)
             
             if r.status_code == 200:
                 data = r.json()
-                # Extração flexível dependendo de como o objeto 'data' vem estruturado
-                eventos = data.get("data", {}).get("events", [])
+                # Extração flexível: tenta encontrar a lista de eventos em diferentes chaves
+                eventos = data.get("events", [])
                 if not eventos:
-                    # Tenta formato alternativo caso venha direto no objeto events
-                    eventos = data.get("events", [])
+                    eventos = data.get("data", {}).get("events", [])
                 return eventos
             
             if r.status_code == 404:
-                print(f"❌ [API] Erro 404 para {nome_equipa}. O endpoint pode estar incorreto para este Host.")
+                print(f"❌ [API] Erro 404 para {nome_equipa}. Tentando rota alternativa...")
+                # Rota alternativa comum em alguns wrappers do Sofascore
+                alt_url = f"https://sofascore6.p.rapidapi.com/api/sofascore/v1/team/{team_id}/events"
+                r_alt = requests.get(alt_url, headers=HEADERS, timeout=10)
+                if r_alt.status_code == 200:
+                    return r_alt.json().get("events", [])
                 return []
             
             if r.status_code == 429:
@@ -176,7 +191,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo):
                     hora_f = dt_jogo.strftime('%H:%M') if not (dt_jogo.hour == 12 and dt_jogo.minute == 0) else dt_jogo.strftime('%d/%m (TBD)')
                     embed.add_field(name=f"🥅 {info['nome']}", value=f"🏆 {liga_nome}\n🕒 **{hora_f}**\n**{home}** vs **{away}**", inline=False)
                     break 
-        # Delay para evitar saturar a API
+        # Delay para respeitar Rate Limit
         await asyncio.sleep(1.5)
 
     if not encontrou:
