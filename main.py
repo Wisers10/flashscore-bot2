@@ -101,36 +101,52 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
 
 # ================= FUNÇÕES DE API =================
 
-def buscar_agenda_dia(data_str):
+def buscar_agenda_dia(data_str, retries=2):
     url = "https://sofascore6.p.rapidapi.com/api/sofascore/v1/match/list"
     params = {"date": data_str, "sport_slug": "football"}
-    print(f"🌐 [API] A consultar todos os jogos do dia: {data_str}")
-    try:
-        r = requests.get(url, headers=HEADERS, params=params, timeout=15)
-        if r.status_code == 200:
-            data = r.json()
-            # Lógica robusta para diferentes formatos de retorno
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict):
-                return data.get("events", []) or data.get("data", {}).get("events", [])
-        return []
-    except Exception as e:
-        print(f"❌ [API] Falha: {e}")
-        return []
+    
+    for i in range(retries + 1):
+        print(f"🌐 [API] A consultar todos os jogos do dia: {data_str} (Tentativa {i+1})")
+        try:
+            # Aumentamos o timeout para 30 segundos
+            r = requests.get(url, headers=HEADERS, params=params, timeout=30)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list):
+                    return data
+                if isinstance(data, dict):
+                    return data.get("events", []) or data.get("data", {}).get("events", [])
+            elif r.status_code == 429:
+                print(f"⚠️ [API] Rate Limit. A esperar 5s...")
+                import time
+                time.sleep(5)
+                continue
+        except requests.exceptions.Timeout:
+            print(f"⚠️ [API] Tempo de espera esgotado na tentativa {i+1}.")
+            if i < retries:
+                import time
+                time.sleep(2)
+                continue
+        except Exception as e:
+            print(f"❌ [API] Falha crítica: {e}")
+            break
+    return []
 
-def buscar_jogos_equipa(team_id):
+def buscar_jogos_equipa(team_id, retries=1):
     url = "https://sofascore6.p.rapidapi.com/api/sofascore/v1/team/events"
     params = {"id": str(team_id)}
-    try:
-        r = requests.get(url, headers=HEADERS, params=params, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list): return data
-            return data.get("events", []) or data.get("data", {}).get("events", [])
-        return []
-    except:
-        return []
+    for i in range(retries + 1):
+        try:
+            r = requests.get(url, headers=HEADERS, params=params, timeout=20)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list): return data
+                return data.get("events", []) or data.get("data", {}).get("events", [])
+            break
+        except:
+            if i < retries: continue
+            break
+    return []
 
 # ================= AGENDAS E TAREFAS =================
 
@@ -143,7 +159,7 @@ async def processar_agenda(canal_ou_ctx, data_obj, titulo):
     eventos_dia = buscar_agenda_dia(data_str)
     
     if not eventos_dia:
-        aviso = f"📅 Não foram encontrados jogos na API para {titulo}."
+        aviso = f"📅 Não foi possível obter jogos da API para {titulo} (Lentidão ou sem jogos)."
         if msg: await msg.edit(content=aviso)
         else: await canal_ou_ctx.send(aviso)
         return
@@ -152,7 +168,6 @@ async def processar_agenda(canal_ou_ctx, data_obj, titulo):
     encontrou = False
     
     for j in eventos_dia:
-        # PROTEÇÃO: Se j não for um dicionário (objeto), ignora para não crashar
         if not isinstance(j, dict):
             continue
 
