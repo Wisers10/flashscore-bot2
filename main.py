@@ -6,9 +6,9 @@ import asyncio
 import os
 
 # ================= CONFIGURAÇÕES =================
-DISCORD_TOKEN = os.os.getenv('DISCORD_TOKEN')
+DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 API_KEY = os.getenv('API_KEY', '6d06a69f23msh5f3ad35148c8b68p1235b8jsnb94b0198382b')
-ID_CANAL_STR = os.getenv('ID_CANAL_NOTIFICACOES', '1501014726111395850')
+ID_CANAL_NOTIFICACOES_STR = os.getenv('ID_CANAL_NOTIFICACOES', '1501014726111395850')
 
 # ID do canal de voz associado aos eventos (ID fornecido: 813485447719813207)
 ID_CANAL_VOZ_STR = os.getenv('ID_CANAL_VOZ', '813485447719813207') 
@@ -21,7 +21,7 @@ if not DISCORD_TOKEN:
     print("❌ ERRO: DISCORD_TOKEN não encontrado.")
     exit()
 
-ID_CANAL_NOTIFICACOES = int(ID_CANAL_STR)
+ID_CANAL_NOTIFICACOES = int(ID_CANAL_NOTIFICACOES_STR)
 
 EQUIPAS = {
     "benfica": {"id": 3006, "nome": "SL Benfica", "cor": 0xff0000},
