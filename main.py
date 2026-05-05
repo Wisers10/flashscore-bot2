@@ -4,6 +4,7 @@ import aiohttp
 import asyncio
 from datetime import datetime, timedelta, time, timezone
 import os
+import time as time_module
 
 # ================= CONFIGURAÇÕES =================
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
@@ -15,6 +16,11 @@ CANAIS_NOTIFICACOES = [int(i.strip()) for i in ID_CANAIS_STR.split(',') if i.str
 
 # ID do canal de voz associado aos eventos (813485447719813207)
 ID_CANAL_VOZ_STR = os.getenv('ID_CANAL_VOZ', '813485447719813207') 
+
+# --- CONFIGURAÇÃO DE CACHE ---
+# Tempo de validade do cache em segundos (Ex: 3600 = 1 hora)
+CACHE_EXPIRY = 3600 
+cache_jogos = {} # Estrutura: {team_id: {"data": [...], "timestamp": float}}
 
 if not DISCORD_TOKEN:
     print("❌ ERRO: DISCORD_TOKEN não encontrado nas variáveis de ambiente.")
@@ -55,10 +61,20 @@ HEADERS = {
     'x-rapidapi-key': API_KEY
 }
 
-# ================= FUNÇÕES ASSÍNCRONAS (VELOCIDADE COM SEGURANÇA) =================
+# ================= FUNÇÕES ASSÍNCRONAS COM CACHE =================
 
 async def buscar_jogos_async(session, team_id, nome_equipa="Equipa", retries=3):
-    """Consulta a API respeitando o semáforo e com lógica de reentrada para 429"""
+    """Consulta a API respeitando o semáforo e utiliza sistema de cache"""
+    agora = time_module.time()
+
+    # 1. Verificar se os dados estão no cache e se ainda são válidos
+    if team_id in cache_jogos:
+        dados_cache = cache_jogos[team_id]
+        if agora - dados_cache["timestamp"] < CACHE_EXPIRY:
+            print(f"ℹ️ [CACHE] A utilizar dados em cache para {nome_equipa}.")
+            return dados_cache["data"]
+
+    # 2. Se não estiver no cache ou expirado, consulta a API
     url = "https://sofasport.p.rapidapi.com/v1/teams/events"
     params = {"team_id": str(team_id), "course_events": "next", "page": "0"}
     
@@ -69,7 +85,14 @@ async def buscar_jogos_async(session, team_id, nome_equipa="Equipa", retries=3):
                     if response.status == 200:
                         data = await response.json()
                         eventos = data.get("data", {}).get("events", [])
-                        print(f"📊 [API] {nome_equipa}: {len(eventos)} eventos recebidos.")
+                        
+                        # Guardar no cache antes de retornar
+                        cache_jogos[team_id] = {
+                            "data": eventos,
+                            "timestamp": agora
+                        }
+                        
+                        print(f"📊 [API] {nome_equipa}: {len(eventos)} eventos recebidos e guardados em cache.")
                         return eventos
                     elif response.status == 429:
                         wait_time = (i + 1) * 3
@@ -150,7 +173,6 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, 
     equipas_alvo = {k: EQUIPAS[k] for k in filtro_lista if k in EQUIPAS} if filtro_lista else EQUIPAS
 
     async with aiohttp.ClientSession(headers=HEADERS) as session:
-        # Prepara as tarefas. O semáforo interno cuidará de fazer um de cada vez.
         tarefas = [buscar_jogos_async(session, info["id"], info["nome"]) for info in equipas_alvo.values()]
         resultados = await asyncio.gather(*tarefas)
 
@@ -282,7 +304,7 @@ async def notificacao_diaria():
 
 @bot.event
 async def on_ready():
-    print(f'✅ [SISTEMA] Bot Online e Robusto: {bot.user}')
+    print(f'✅ [SISTEMA] Bot Online e Cache Ativado: {bot.user}')
     if not notificacao_diaria.is_running():
         notificacao_diaria.start()
 
