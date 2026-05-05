@@ -10,10 +10,10 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 API_KEY = os.getenv('API_KEY', '6d06a69f23msh5f3ad35148c8b68p1235b8jsnb94b0198382b')
 ID_CANAL_NOTIFICACOES_STR = os.getenv('ID_CANAL_NOTIFICACOES', '1501014726111395850')
 
-# ID do canal de voz associado aos eventos (ID fornecido: 813485447719813207)
+# ID do canal de voz associado aos eventos (813485447719813207)
 ID_CANAL_VOZ_STR = os.getenv('ID_CANAL_VOZ', '813485447719813207') 
 
-# SEGURANÇA: Servidores autorizados (Opcional)
+# SEGURANÇA: Servidores autorizados
 ALLOWED_GUILDS_STR = os.getenv('ALLOWED_GUILDS', '') 
 ALLOWED_GUILDS = [int(g.strip()) for g in ALLOWED_GUILDS_STR.split(',') if g.strip().isdigit()]
 
@@ -46,41 +46,26 @@ intents.message_content = True
 intents.guild_scheduled_events = True 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+# Atualizado conforme a tua imagem: sofascore6.p.rapidapi.com
 HEADERS = {
-    'x-rapidapi-host': "sofasport.p.rapidapi.com",
+    'x-rapidapi-host': "sofascore6.p.rapidapi.com",
     'x-rapidapi-key': API_KEY
 }
-
-# ================= FILTRO DE PRIVACIDADE =================
-
-@bot.check
-async def is_guild_allowed(ctx):
-    if not ALLOWED_GUILDS: return True
-    return ctx.guild and ctx.guild.id in ALLOWED_GUILDS
 
 # ================= FUNÇÕES DE EVENTOS DO DISCORD =================
 
 async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
-    """Cria um evento agendado no servidor num canal de voz ou externo"""
     if data_inicio.tzinfo is None:
         data_inicio = data_inicio.replace(tzinfo=timezone.utc)
 
     agora = datetime.now(timezone.utc)
-    
-    if data_inicio < agora:
-        print(f"ℹ️ [EVENTO] Ignorado {nome_jogo}: O jogo já passou.")
-        return False
-        
-    if data_inicio.hour == 12 and data_inicio.minute == 0:
-        print(f"ℹ️ [EVENTO] Ignorado {nome_jogo}: Hora TBD (12h UTC).")
+    if data_inicio < agora or (data_inicio.hour == 12 and data_inicio.minute == 0):
         return False
 
     try:
-        # Verifica se já existe um evento para este jogo no mesmo dia
         eventos_atuais = await guild.fetch_scheduled_events()
         for e in eventos_atuais:
             if e.name == nome_jogo and e.start_time.date() == data_inicio.date():
-                print(f"ℹ️ [EVENTO] Ignorado {nome_jogo}: Evento já existe.")
                 return False
 
         data_fim = data_inicio + timedelta(hours=2)
@@ -119,19 +104,33 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
 
 # ================= FUNÇÕES DE API =================
 
-def buscar_jogos_sofasport(team_id, nome_equipa="Equipa"):
-    url = "https://sofasport.p.rapidapi.com/v1/teams/events"
-    params = {"team_id": str(team_id), "course_events": "next", "page": "0"}
-    print(f"🌐 [API] A consultar: {nome_equipa}")
-    try:
-        r = requests.get(url, headers=HEADERS, params=params, timeout=10)
-        if r.status_code == 200:
-            return r.json().get("data", {}).get("events", [])
-        print(f"⚠️ [API] Erro {r.status_code} para {nome_equipa}")
-        return []
-    except Exception as e:
-        print(f"❌ [API] Erro de conexão: {e}")
-        return []
+def buscar_jogos_sofasport(team_id, nome_equipa="Equipa", retries=3):
+    # Endpoint ajustado para o Host sofascore6
+    url = f"https://sofascore6.p.rapidapi.com/api/sofascore/v1/team/{team_id}/events-next"
+    
+    for i in range(retries):
+        print(f"🌐 [API] A consultar: {nome_equipa} (Tentativa {i+1})")
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=10)
+            
+            if r.status_code == 200:
+                # O formato do JSON pode variar entre hosts, adaptamos aqui
+                return r.json().get("data", {}).get("events", [])
+            
+            if r.status_code == 429:
+                wait_time = (i + 1) * 3
+                print(f"⚠️ [API] Rate Limit para {nome_equipa}. Esperando {wait_time}s...")
+                import time
+                time.sleep(wait_time)
+                continue
+                
+            print(f"⚠️ [API] Erro {r.status_code} para {nome_equipa}")
+            return []
+            
+        except Exception as e:
+            print(f"❌ [API] Erro de conexão: {e}")
+            return []
+    return []
 
 # ================= AGENDAS E TAREFAS =================
 
@@ -163,7 +162,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo):
                     hora_f = dt_jogo.strftime('%H:%M') if not (dt_jogo.hour == 12 and dt_jogo.minute == 0) else dt_jogo.strftime('%d/%m (TBD)')
                     embed.add_field(name=f"🥅 {info['nome']}", value=f"🏆 {liga_nome}\n🕒 **{hora_f}**\n**{home}** vs **{away}**", inline=False)
                     break 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.5)
 
     if not encontrou:
         aviso = f"📅 Não foram encontrados jogos para {titulo}."
@@ -194,7 +193,7 @@ async def amanha(ctx):
 @bot.command()
 async def comandos(ctx):
     embed = discord.Embed(title="📖 Guia de Comandos", color=0x3498db)
-    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha` (Cria eventos automaticamente)", inline=False)
+    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha` (Automático)", inline=False)
     embed.add_field(name="⚽ Equipas", value=", ".join([f"!{k}" for k in EQUIPAS.keys()]), inline=False)
     await ctx.send(embed=embed)
 
