@@ -61,7 +61,7 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
     data_inicio_pt = data_inicio.astimezone(TZ_PT)
     agora_pt = datetime.now(TZ_PT)
 
-    # Ignora jogos passados ou sem hora definida
+    # Ignora jogos passados ou sem hora definida (13h PT costuma ser placeholder)
     if data_inicio_pt < agora_pt or (data_inicio_pt.hour == 13 and data_inicio_pt.minute == 0):
         return False
 
@@ -137,19 +137,28 @@ def buscar_agenda_dia(data_str, retries=2):
     return []
 
 def buscar_jogos_equipa(team_id, retries=1):
-    url = "https://sofascore6.p.rapidapi.com/api/sofascore/v1/team/events"
-    params = {"id": str(team_id)}
-    for i in range(retries + 1):
-        try:
-            r = requests.get(url, headers=HEADERS, params=params, timeout=20)
-            if r.status_code == 200:
-                data = r.json()
-                if isinstance(data, list): return data
-                return data.get("events", []) or data.get("data", {}).get("events", [])
-            break
-        except:
-            if i < retries: continue
-            break
+    # Tentamos os dois caminhos mais prováveis para eventos de equipa nesta API
+    endpoints = [
+        f"https://sofascore6.p.rapidapi.com/api/sofascore/v1/team/events",
+        f"https://sofascore6.p.rapidapi.com/api/sofascore/v1/team/matches/next"
+    ]
+    
+    for url in endpoints:
+        params = {"id": str(team_id)}
+        for i in range(retries + 1):
+            try:
+                r = requests.get(url, headers=HEADERS, params=params, timeout=20)
+                if r.status_code == 200:
+                    data = r.json()
+                    lista = []
+                    if isinstance(data, list): lista = data
+                    else: lista = data.get("events", []) or data.get("data", {}).get("events", [])
+                    
+                    if lista: return lista
+                break
+            except:
+                if i < retries: continue
+                break
     return []
 
 # ================= AGENDAS E TAREFAS =================
@@ -157,14 +166,14 @@ def buscar_jogos_equipa(team_id, retries=1):
 async def processar_agenda(canal_ou_ctx, data_obj, titulo, filtro_lista=None, filtrar_liga=None):
     msg = None
     if isinstance(canal_ou_ctx, commands.Context):
-        msg = await canal_ou_ctx.send(f"🔍 A consultar agenda para {titulo}...")
+        msg = await canal_ou_ctx.send(f"🔍 A consultar agenda para **{titulo}**...")
     
     data_str = data_obj.strftime('%Y-%m-%d') if data_obj else None
     
-    # Se não houver data (comandos de liga), pesquisamos cada equipa individualmente (para pegar o próximo jogo)
+    # Se não houver data (comandos de liga), pesquisamos cada equipa individualmente
     if not data_obj:
         embed = discord.Embed(title=f"⚽ {titulo}", color=0x3498db)
-        encontrou = False
+        encontrou_geral = False
         equipas_alvo = filtro_lista if filtro_lista else EQUIPAS.keys()
         
         for chave in equipas_alvo:
@@ -173,11 +182,15 @@ async def processar_agenda(canal_ou_ctx, data_obj, titulo, filtro_lista=None, fi
             for j in eventos:
                 if not isinstance(j, dict): continue
                 liga_nome = j.get("tournament", {}).get("name", "Competição")
+                
+                # Filtro de liga mais flexível
                 if filtrar_liga and filtrar_liga.lower() not in liga_nome.lower():
                     continue
                 
-                encontrou = True
                 ts = j.get("startTimestamp")
+                if not ts: continue
+                
+                encontrou_geral = True
                 dt_jogo = datetime.fromtimestamp(ts, tz=timezone.utc)
                 hora_f = dt_jogo.astimezone(TZ_PT).strftime('%d/%m %H:%M')
                 nome_jogo = f"{j['homeTeam']['name']} vs {j['awayTeam']['name']}"
@@ -185,9 +198,10 @@ async def processar_agenda(canal_ou_ctx, data_obj, titulo, filtro_lista=None, fi
                 embed.add_field(name=f"🥅 {info['nome']}", value=f"🏆 {liga_nome}\n🕒 **{hora_f}**\n**{nome_jogo}**", inline=False)
                 break
             await asyncio.sleep(0.5)
+        encontrou = encontrou_geral
             
     else:
-        # Lógica otimizada para HOJE/AMANHÃ (um único pedido à API)
+        # Lógica otimizada para HOJE/AMANHÃ
         eventos_dia = buscar_agenda_dia(data_str)
         if not eventos_dia:
             aviso = f"📅 Não foi possível obter jogos para {titulo}."
@@ -196,21 +210,26 @@ async def processar_agenda(canal_ou_ctx, data_obj, titulo, filtro_lista=None, fi
             return
 
         embed = discord.Embed(title=f"⚽ Agenda: {titulo}", color=0xf1c40f)
-        encontrou = False
+        encontrou_dia = False
         ids_filtro = {EQUIPAS[k]["id"] for k in filtro_lista} if filtro_lista else IDS_AUTORIZADOS
         
         for j in eventos_dia:
             if not isinstance(j, dict): continue
-            home_id = int(j.get("homeTeam", {}).get("id", 0))
-            away_id = int(j.get("awayTeam", {}).get("id", 0))
+            
+            try:
+                home_id = int(j.get("homeTeam", {}).get("id", 0))
+                away_id = int(j.get("awayTeam", {}).get("id", 0))
+            except: continue
             
             if home_id in ids_filtro or away_id in ids_filtro:
                 liga = j.get("tournament", {}).get("name", "Competição")
                 if filtrar_liga and filtrar_liga.lower() not in liga.lower():
                     continue
 
-                encontrou = True
                 ts = j.get("startTimestamp")
+                if not ts: continue
+                
+                encontrou_dia = True
                 dt_jogo = datetime.fromtimestamp(ts, tz=timezone.utc)
                 nome_jogo = f"{j['homeTeam']['name']} vs {j['awayTeam']['name']}"
 
@@ -219,9 +238,10 @@ async def processar_agenda(canal_ou_ctx, data_obj, titulo, filtro_lista=None, fi
 
                 hora_f = dt_jogo.astimezone(TZ_PT).strftime('%H:%M')
                 embed.add_field(name=f"🥅 {nome_jogo}", value=f"🏆 {liga}\n🕒 **{hora_f}**", inline=False)
+        encontrou = encontrou_dia
 
     if not encontrou:
-        aviso = f"📅 Nenhuma das equipas selecionadas joga em {titulo}."
+        aviso = f"📅 Nenhuma das equipas selecionadas joga em **{titulo}**."
         if msg: await msg.edit(content=aviso)
         else: await canal_ou_ctx.send(aviso)
     else:
