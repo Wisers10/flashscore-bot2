@@ -6,11 +6,10 @@ import asyncio
 import os
 
 # ================= CONFIGURAÇÕES DE SEGURANÇA =================
-# NUNCA coloques o token diretamente aqui. 
 # O bot vai ler o token das "Environment Variables" do teu servidor (Railway/Render/VPS).
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 API_KEY = os.getenv('API_KEY', '6d06a69f23msh5f3ad35148c8b68p1235b8jsnb94b0198382b')
-ID_CANAL_STR = os.getenv('ID_CANAL_NOTIFICACOES', '123456789012345678')
+ID_CANAL_STR = os.getenv('ID_CANAL_NOTIFICACOES', '1501014726111395850')
 
 # Verificação de segurança: O bot para se o Token não estiver configurado no ambiente
 if not DISCORD_TOKEN:
