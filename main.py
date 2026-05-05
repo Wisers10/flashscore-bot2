@@ -6,7 +6,6 @@ import asyncio
 import os
 
 # ================= CONFIGURAÇÕES =================
-# Certifica-te de que estas variáveis estão configuradas no Railway
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 API_KEY = os.getenv('API_KEY', '6d06a69f23msh5f3ad35148c8b68p1235b8jsnb94b0198382b')
 ID_CANAL_STR = os.getenv('ID_CANAL_NOTIFICACOES', '123456789012345678')
@@ -56,11 +55,12 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
         data_inicio = data_inicio.replace(tzinfo=timezone.utc)
 
     agora = datetime.now(timezone.utc)
+    # Ignora se o jogo já começou ou se a hora for placeholder (12h00 UTC)
     if data_inicio < agora or (data_inicio.hour == 12 and data_inicio.minute == 0):
         return False
 
     try:
-        # Verifica se já existe um evento para este jogo
+        # Verifica duplicados
         eventos_atuais = await guild.fetch_scheduled_events()
         for e in eventos_atuais:
             if e.name == nome_jogo and e.start_time.date() == data_inicio.date():
@@ -68,7 +68,7 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
 
         data_fim = data_inicio + timedelta(hours=2)
 
-        # Tenta obter o canal de voz configurado
+        # Canal de Voz
         canal_voz = None
         if ID_CANAL_VOZ_STR:
             try:
@@ -76,10 +76,10 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
             except:
                 canal_voz = None
 
-        if canal_voz:
+        if canal_voz and isinstance(canal_voz, discord.VoiceChannel):
             await guild.create_scheduled_event(
                 name=nome_jogo,
-                description=f"🏆 {liga} - Vamos comentar o jogo em direto no canal de voz!",
+                description=f"🏆 {liga} - Vamos comentar o jogo no canal de voz!",
                 start_time=data_inicio,
                 end_time=data_fim,
                 entity_type=discord.EntityType.voice,
@@ -89,7 +89,7 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
         else:
             await guild.create_scheduled_event(
                 name=nome_jogo,
-                description=f"🏆 {liga} - Acompanha o jogo!",
+                description=f"🏆 {liga} - Acompanha o jogo aqui no servidor!",
                 start_time=data_inicio,
                 end_time=data_fim,
                 entity_type=discord.EntityType.external,
@@ -126,7 +126,6 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo):
     encontrou = False
     
     for chave, info in EQUIPAS.items():
-        # Busca síncrona simples (como estava na versão estável)
         eventos = buscar_jogos_sofasport(info["id"])
         for j in eventos:
             ts = j.get("startTimestamp")
@@ -139,7 +138,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo):
                     liga_nome = j.get("tournament", {}).get("name", "Competição")
                     nome_jogo = f"{home} vs {away}"
 
-                    # Cria o evento no Discord
+                    # Tenta criar o evento no Discord
                     if canal_ou_ctx.guild:
                         await criar_evento_discord(canal_ou_ctx.guild, nome_jogo, dt_jogo, liga_nome)
 
@@ -150,8 +149,9 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo):
                         value=f"🏆 {liga_nome}\n🕒 **{hora_f}**\n**{home}** vs **{away}**",
                         inline=False
                     )
-                    break
-        await asyncio.sleep(0.5) # Pequena pausa para não bloquear o bot
+                    break # Encontramos o jogo do dia para esta equipa
+        # Pequena pausa para evitar bloqueios de API
+        await asyncio.sleep(0.5)
 
     if not encontrou:
         aviso = f"📅 Não foram encontrados jogos para {titulo}."
@@ -186,7 +186,6 @@ async def comandos(ctx):
     embed.add_field(name="⚽ Equipas", value=", ".join([f"!{k}" for k in EQUIPAS.keys()]), inline=False)
     await ctx.send(embed=embed)
 
-# Comandos de equipa simplificados
 async def cmd_equipa(ctx, chave):
     info = EQUIPAS[chave]
     eventos = buscar_jogos_sofasport(info["id"])
@@ -207,14 +206,19 @@ async def porto(ctx): await cmd_equipa(ctx, "porto")
 @bot.command()
 async def sporting(ctx): await cmd_equipa(ctx, "sporting")
 @bot.command()
+async def braga(ctx): await cmd_equipa(ctx, "braga")
+@bot.command()
 async def psg(ctx): await cmd_equipa(ctx, "psg")
 @bot.command()
 async def bayern(ctx): await cmd_equipa(ctx, "bayern")
-# ... podes adicionar os outros conforme necessário
+@bot.command()
+async def realmadrid(ctx): await cmd_equipa(ctx, "realmadrid")
+@bot.command()
+async def barcelona(ctx): await cmd_equipa(ctx, "barcelona")
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot Online e Estável: {bot.user}')
+    print(f'✅ Bot Online e Estável (Versão Requests): {bot.user}')
     if not notificacao_diaria.is_running():
         notificacao_diaria.start()
 
