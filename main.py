@@ -9,7 +9,7 @@ import os
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 API_KEY = os.getenv('API_KEY', '6d06a69f23msh5f3ad35148c8b68p1235b8jsnb94b0198382b')
 
-# IDs dos canais de notificações (Configurado para suportar os dois canais pedidos)
+# IDs dos canais de notificações
 ID_CANAIS_STR = os.getenv('ID_CANAL_NOTIFICACOES', '1500947090560389304,1501014726111395850')
 CANAIS_NOTIFICACOES = [int(i.strip()) for i in ID_CANAIS_STR.split(',') if i.strip().isdigit()]
 
@@ -20,8 +20,8 @@ if not DISCORD_TOKEN:
     print("❌ ERRO: DISCORD_TOKEN não encontrado nas variáveis de ambiente.")
     exit()
 
-# Limita o número de pedidos simultâneos para evitar o Erro 429 (Rate Limit)
-api_semaphore = asyncio.Semaphore(5)
+# Reduzido para 1 para garantir que a API não bloqueia por excesso de pedidos simultâneos
+api_semaphore = asyncio.Semaphore(1)
 
 EQUIPAS = {
     "benfica": {"id": 3006, "nome": "SL Benfica", "cor": 0xff0000},
@@ -55,28 +55,41 @@ HEADERS = {
     'x-rapidapi-key': API_KEY
 }
 
-# ================= FUNÇÕES ASSÍNCRONAS (VELOCIDADE) =================
+# ================= FUNÇÕES ASSÍNCRONAS (VELOCIDADE COM SEGURANÇA) =================
 
-async def buscar_jogos_async(session, team_id, nome_equipa="Equipa"):
-    """Consulta a API de forma assíncrona respeitando o semáforo de tráfego"""
+async def buscar_jogos_async(session, team_id, nome_equipa="Equipa", retries=3):
+    """Consulta a API respeitando o semáforo e com lógica de reentrada para 429"""
     url = "https://sofasport.p.rapidapi.com/v1/teams/events"
     params = {"team_id": str(team_id), "course_events": "next", "page": "0"}
     
     async with api_semaphore:
-        try:
-            async with session.get(url, params=params, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    eventos = data.get("data", {}).get("events", [])
-                    print(f"📊 [API] {nome_equipa}: {len(eventos)} eventos recebidos.")
-                    return eventos
-                elif response.status == 429:
-                    print(f"⚠️ [API] Rate Limit para {nome_equipa}. A tentar processar mais tarde.")
-                    return []
+        for i in range(retries):
+            try:
+                async with session.get(url, params=params, timeout=15) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        eventos = data.get("data", {}).get("events", [])
+                        print(f"📊 [API] {nome_equipa}: {len(eventos)} eventos recebidos.")
+                        return eventos
+                    elif response.status == 429:
+                        wait_time = (i + 1) * 3
+                        print(f"⚠️ [API] Rate Limit para {nome_equipa}. A aguardar {wait_time}s para nova tentativa...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"⚠️ [API] Erro {response.status} para {nome_equipa}")
+                        return []
+            except Exception as e:
+                print(f"❌ [API] Falha em {nome_equipa}: {e}")
+                if i < retries - 1:
+                    await asyncio.sleep(2)
+                    continue
                 return []
-        except Exception as e:
-            print(f"❌ [API] Falha em {nome_equipa}: {e}")
-            return []
+            
+            # Pequeno intervalo extra para não saturar pedidos por segundo
+            await asyncio.sleep(1)
+            
+    return []
 
 async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
     """Cria um evento agendado no canal de voz definido"""
@@ -128,7 +141,7 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga):
 async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, filtrar_liga=None):
     msg = None
     if isinstance(canal_ou_ctx, commands.Context):
-        msg = await canal_ou_ctx.send(f"🚀 A consultar agenda para {titulo} (Modo Turbo)...")
+        msg = await canal_ou_ctx.send(f"🔍 A consultar agenda para {titulo}...")
     
     print(f"📅 [AGENDA] Início da consulta: {titulo}")
     embed = discord.Embed(title=f"⚽ {titulo}", color=0xf1c40f)
@@ -137,11 +150,10 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, 
     equipas_alvo = {k: EQUIPAS[k] for k in filtro_lista if k in EQUIPAS} if filtro_lista else EQUIPAS
 
     async with aiohttp.ClientSession(headers=HEADERS) as session:
-        # Cria todas as tarefas para serem executadas ao mesmo tempo
+        # Prepara as tarefas. O semáforo interno cuidará de fazer um de cada vez.
         tarefas = [buscar_jogos_async(session, info["id"], info["nome"]) for info in equipas_alvo.values()]
         resultados = await asyncio.gather(*tarefas)
 
-        # Processa os resultados de forma organizada
         for (chave, info), eventos in zip(equipas_alvo.items(), resultados):
             for j in eventos:
                 ts = j.get("startTimestamp")
@@ -266,11 +278,11 @@ async def notificacao_diaria():
         canal = bot.get_channel(id_canal)
         if canal:
             await gerar_agenda_data(canal, hoje_dt, "Agenda de Hoje")
-            await asyncio.sleep(2) # Pequena pausa entre canais por segurança
+            await asyncio.sleep(2) 
 
 @bot.event
 async def on_ready():
-    print(f'✅ [SISTEMA] Bot Online e Otimizado: {bot.user}')
+    print(f'✅ [SISTEMA] Bot Online e Robusto: {bot.user}')
     if not notificacao_diaria.is_running():
         notificacao_diaria.start()
 
