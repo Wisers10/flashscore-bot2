@@ -130,7 +130,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, 
     
     embed = discord.Embed(title=f"⚽ {titulo}", color=0xf1c40f)
     encontrou = False
-    jogos_adicionados = set() # Para evitar duplicados (ex: PSG vs Bayern aparecer 2 vezes)
+    jogos_adicionados = set()
     
     equipas_alvo = {k: EQUIPAS[k] for k in filtro_lista if k in EQUIPAS} if filtro_lista else EQUIPAS
 
@@ -148,19 +148,20 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, 
                     dt_jogo = datetime.fromtimestamp(ts, tz=timezone.utc)
                     liga_nome = j.get("tournament", {}).get("name", "Competição")
                     
-                    # Filtro de data
+                    # Filtro de data: Se data_alvo for definida, tem de bater certo
                     if data_alvo and dt_jogo.date() != data_alvo:
                         continue
                     
-                    # Filtro de liga (opcional)
-                    if filtrar_liga and filtrar_liga.lower() not in liga_nome.lower():
-                        continue
+                    # Filtro de liga (mais abrangente para Champions por exemplo)
+                    if filtrar_liga:
+                        palavras_filtro = filtrar_liga.lower().split()
+                        if not all(p in liga_nome.lower() for p in palavras_filtro):
+                            continue
 
                     home = j.get("homeTeam", {}).get("name", "N/A")
                     away = j.get("awayTeam", {}).get("name", "N/A")
                     nome_jogo = f"{home} vs {away}"
                     
-                    # Verifica se o jogo já foi adicionado nesta consulta
                     jogo_id = f"{nome_jogo}_{dt_jogo.strftime('%Y%m%d')}"
                     if jogo_id in jogos_adicionados:
                         continue
@@ -175,7 +176,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, 
                     data_str = "" if data_alvo else f"📅 {dt_jogo.strftime('%d/%m')} "
                     
                     embed.add_field(name=f"🥅 {nome_jogo}", value=f"🏆 {liga_nome}\n🕒 {data_str}**{hora_f}**", inline=False)
-                    break # Passa para a próxima equipa após encontrar o primeiro jogo válido
+                    break 
 
     if not encontrou:
         t = f"📅 Sem jogos encontrados para {titulo}."
@@ -189,22 +190,26 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, 
 async def notificacao_diaria():
     canal = bot.get_channel(ID_CANAL_NOTIFICACOES)
     if canal:
-        await gerar_agenda_data(canal, datetime.now(timezone.utc).date(), "Agenda de Hoje")
+        # Hoje em Portugal (aproximado via UTC+1)
+        hoje_date = (datetime.now(timezone.utc) + timedelta(hours=1)).date()
+        await gerar_agenda_data(canal, hoje_date, "Agenda de Hoje")
 
 # ================= COMANDOS =================
 
 @bot.command()
 async def hoje(ctx): 
-    await gerar_agenda_data(ctx, datetime.now(timezone.utc).date(), "Agenda de Hoje")
+    hoje_date = (datetime.now(timezone.utc) + timedelta(hours=1)).date()
+    await gerar_agenda_data(ctx, hoje_date, "Agenda de Hoje")
 
 @bot.command()
 async def amanha(ctx): 
-    amanha_date = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+    # Calculamos amanhã com base na hora de Portugal (UTC+1)
+    amanha_date = (datetime.now(timezone.utc) + timedelta(hours=1) + timedelta(days=1)).date()
     await gerar_agenda_data(ctx, amanha_date, "Agenda de Amanhã")
 
 @bot.command()
 async def champions(ctx):
-    # Mostra os próximos jogos da Champions das nossas equipas (independentemente do dia)
+    # Mostra os próximos jogos da Champions (filtro flexível)
     await gerar_agenda_data(ctx, None, "Próximos Jogos: UEFA Champions League", filtrar_liga="Champions League")
 
 @bot.command()
