@@ -16,6 +16,9 @@ ID_CANAIS_STR = os.getenv('ID_CANAL_NOTIFICACOES', '1500947090560389304,15010147
 CANAIS_NOTIFICACOES = [int(i.strip()) for i in ID_CANAIS_STR.split(',') if i.strip().isdigit()]
 ID_CANAL_VOZ_STR = os.getenv('ID_CANAL_VOZ', '813485447719813207') 
 
+# Fuso horário de Portugal (Ajuste manual de +1h sobre o UTC)
+OFFSET_PT = timedelta(hours=1)
+
 CACHE_EXPIRY = 3600 
 cache_jogos = {}
 
@@ -94,32 +97,22 @@ async def buscar_tv_portugal(session, home_name, away_name):
     try:
         async with session.get(url, headers=HEADERS_WEB, timeout=12) as response:
             if response.status != 200: 
-                print(f"⚠️ [SCRAPER] Erro {response.status} ao aceder ao guia de TV.")
                 return None
             
             html = await response.text()
             soup = BeautifulSoup(html, 'html.parser')
-            
-            # Procura em todos os blocos de jogos (divs ou linhas)
             blocos = soup.find_all(['div', 'tr', 'li'])
 
             for bloco in blocos:
                 texto = bloco.get_text().upper()
-                
-                # Se as duas equipas (normalizadas) aparecem no mesmo bloco
                 if h_simple in texto and a_simple in texto:
-                    # Lista de canais PT por prioridade
                     canais_pt = ["TVI", "SIC", "RTP 1", "RTP", "SPORT TV", "DAZN", "ELEVEN", "BTV", "CANAL 11", "EUROSPORT"]
                     for canal in canais_pt:
                         if canal in texto:
-                            # Tenta capturar o número do canal se existir (ex: SPORT TV 1 ou DAZN 2)
                             match = re.search(rf"{canal}\s*\d+", texto)
-                            resultado = match.group(0) if match else canal
-                            print(f"✅ [SCRAPER] Encontrado: {resultado}")
-                            return resultado
+                            return match.group(0) if match else canal
             return None
-    except Exception as e:
-        print(f"❌ [SCRAPER] Erro: {e}")
+    except:
         return None
 
 # ================= FUNÇÕES DE API =================
@@ -145,31 +138,33 @@ async def buscar_jogos_async(session, team_id, nome_equipa="Equipa"):
         except:
             return []
 
-async def criar_evento_discord(guild, nome_jogo, data_inicio, liga, tv_info=None):
-    if data_inicio.tzinfo is None: data_inicio = data_inicio.replace(tzinfo=timezone.utc)
-    agora = datetime.now(timezone.utc)
-    if data_inicio < agora or (data_inicio.hour == 12 and data_inicio.minute == 0): return False
+async def criar_evento_discord(guild, nome_jogo, data_inicio_utc, liga, tv_info=None):
+    # Soma 1 hora para o fuso de Portugal
+    data_pt = data_inicio_utc.replace(tzinfo=timezone.utc).astimezone(timezone(OFFSET_PT))
+    agora_pt = datetime.now(timezone(OFFSET_PT))
+    
+    if data_pt < agora_pt or (data_pt.hour == 13 and data_pt.minute == 0): return False
 
     try:
         eventos_atuais = await guild.fetch_scheduled_events()
         for e in eventos_atuais:
-            if e.name == nome_jogo and e.start_time.date() == data_inicio.date(): return False
+            if e.name == nome_jogo and e.start_time.astimezone(timezone(OFFSET_PT)).date() == data_pt.date(): return False
 
         desc = f"🏆 {liga}"
         desc += f"\n📺 Transmissão: **{tv_info if tv_info else 'Não listado'}**"
         desc += "\n\nVamos comentar o jogo no canal de voz!"
 
-        data_fim = data_inicio + timedelta(hours=2)
+        data_fim = data_pt + timedelta(hours=2)
         canal_voz = guild.get_channel(int(ID_CANAL_VOZ_STR)) if ID_CANAL_VOZ_STR else None
 
         if canal_voz:
             await guild.create_scheduled_event(
-                name=nome_jogo, description=desc, start_time=data_inicio, end_time=data_fim,
+                name=nome_jogo, description=desc, start_time=data_pt, end_time=data_fim,
                 entity_type=discord.EntityType.voice, channel=canal_voz, privacy_level=discord.PrivacyLevel.guild_only
             )
         else:
             await guild.create_scheduled_event(
-                name=nome_jogo, description=desc, start_time=data_inicio, end_time=data_fim,
+                name=nome_jogo, description=desc, start_time=data_pt, end_time=data_fim,
                 entity_type=discord.EntityType.external, location="Televisão", privacy_level=discord.PrivacyLevel.guild_only
             )
         return True
@@ -178,7 +173,7 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga, tv_info=None
 
 # ================= AGENDAS =================
 
-async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, filtrar_liga=None):
+async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo, filtro_lista=None, filtrar_liga=None):
     msg = None
     if isinstance(canal_ou_ctx, commands.Context):
         msg = await canal_ou_ctx.send(f"🚀 A consultar agenda e transmissões 🇵🇹...")
@@ -197,28 +192,32 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, 
             for j in eventos:
                 ts = j.get("startTimestamp")
                 if ts:
-                    dt_jogo = datetime.fromtimestamp(ts, tz=timezone.utc)
+                    # Cálculo de hora: API (UTC) -> Portugal (+1h)
+                    dt_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
+                    dt_pt = dt_utc + OFFSET_PT
+                    
                     liga_nome = j.get("tournament", {}).get("name", "Competição")
                     
-                    if data_alvo and dt_jogo.date() != data_alvo: continue
+                    # Filtra pela data de Portugal
+                    if data_alvo_pt and dt_pt.date() != data_alvo_pt: continue
                     if filtrar_liga and filtrar_liga.lower() not in liga_nome.lower(): continue
 
                     home = j.get("homeTeam", {}).get("name", "N/A")
                     away = j.get("awayTeam", {}).get("name", "N/A")
                     
-                    jogo_id = f"{home}_{away}_{dt_jogo.strftime('%Y%m%d')}"
+                    jogo_id = f"{home}_{away}_{dt_pt.strftime('%Y%m%d')}"
                     if jogo_id in jogos_processados: continue
                     
                     encontrou = True
                     jogos_processados.add(jogo_id)
                     
-                    # Procura TV em tempo real no Jogos na TV
                     tv_info = await buscar_tv_portugal(session, home, away)
                     
                     if canal_ou_ctx.guild:
-                        await criar_evento_discord(canal_ou_ctx.guild, f"{home} vs {away}", dt_jogo, liga_nome, tv_info)
+                        await criar_evento_discord(canal_ou_ctx.guild, f"{home} vs {away}", dt_utc, liga_nome, tv_info)
 
-                    hora_f = dt_jogo.strftime('%H:%M') if not (dt_jogo.hour == 12 and dt_jogo.minute == 0) else dt_jogo.strftime('%d/%m (TBD)')
+                    # Formatação final: Se for 13:00 (12h UTC), assume-se TBD
+                    hora_f = dt_pt.strftime('%H:%M') if not (dt_pt.hour == 13 and dt_pt.minute == 0) else dt_pt.strftime('%d/%m (TBD)')
                     tv_str = f"\n📺 **{tv_info}**" if tv_info else "\n📺 *Não listado no guia*"
                     
                     embed.add_field(
@@ -239,12 +238,16 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, 
 # ================= COMANDOS =================
 
 @bot.command()
-async def hoje(ctx): await gerar_agenda_data(ctx, datetime.now(timezone.utc).date(), "Hoje")
+async def hoje(ctx):
+    # Hoje em Portugal
+    hoje_pt = (datetime.now(timezone.utc) + OFFSET_PT).date()
+    await gerar_agenda_data(ctx, hoje_pt, "Hoje")
 
 @bot.command()
 async def amanha(ctx):
-    amanha_data = (datetime.now(timezone.utc) + timedelta(days=1)).date()
-    await gerar_agenda_data(ctx, amanha_data, "Amanhã")
+    # Amanhã em Portugal
+    amanha_pt = (datetime.now(timezone.utc) + OFFSET_PT + timedelta(days=1)).date()
+    await gerar_agenda_data(ctx, amanha_pt, "Amanhã")
 
 async def cmd_equipa(ctx, chave):
     await gerar_agenda_data(ctx, None, f"Agenda: {EQUIPAS[chave]['nome']}", filtro_lista=[chave])
@@ -263,13 +266,13 @@ async def sporting(ctx): await cmd_equipa(ctx, "sporting")
 @bot.command()
 async def comandos(ctx):
     embed = discord.Embed(title="📖 Guia de Comandos", color=0x3498db)
-    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha` (Com canais 🇵🇹)", inline=False)
+    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha` (Horário de Portugal 🇵🇹)", inline=False)
     embed.add_field(name="⚽ Equipas", value=", ".join([f"!{k}" for k in EQUIPAS.keys()]), inline=False)
     await ctx.send(embed=embed)
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot Online (Guia de TV Real-Time): {bot.user}')
+    print(f'✅ Bot Online (Horário corrigido para Portugal +1h): {bot.user}')
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
