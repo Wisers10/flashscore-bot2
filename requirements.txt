@@ -1,4 +1,4 @@
 discord.py
-requests
+aiohttp
 python-dotenv
 beautifulsoup4

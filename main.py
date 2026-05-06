@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, time, timezone
 import os
 import time as time_module
+import re
 
 # ================= CONFIGURAÇÕES =================
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
@@ -52,43 +53,78 @@ HEADERS_API = {
     'x-rapidapi-key': API_KEY
 }
 
-# User-Agent para o ZeroZero não bloquear o bot como "robô"
-HEADERS_ZZ = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+# Headers para evitar bloqueios de scraping
+HEADERS_WEB = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept-Language': 'pt-PT,pt;q=0.9,en;q=0.8'
 }
 
-# ================= FUNÇÃO DE SCRAPING (ZEROZERO) =================
+# ================= FUNÇÕES DE UTILIDADE =================
+
+def normalizar_nome(nome):
+    """Simplifica nomes de equipas para bater com o guia de TV nacional"""
+    nome = nome.upper()
+    substituicoes = {
+        "PARIS SAINT-GERMAIN": "PSG",
+        "BAYERN MÜNCHEN": "BAYERN",
+        "BAYERN MUNICH": "BAYERN",
+        "MANCHESTER CITY": "MAN CITY",
+        "MANCHESTER UNITED": "MAN UTD",
+        "SPORTING CP": "SPORTING",
+        "SL BENFICA": "BENFICA",
+        "FC PORTO": "PORTO",
+        "SC BRAGA": "BRAGA"
+    }
+    for original, novo in substituicoes.items():
+        if original in nome:
+            return novo
+    return re.sub(r'\b(FC|SL|SC|CP|REAL|ST|CLUB|ATLETICO)\b', '', nome).strip()
+
+# ================= MOTOR DE BUSCA DE TV (JOGOSNA.TV) =================
 
 async def buscar_tv_portugal(session, home_name, away_name):
-    """Tenta encontrar o canal de TV no ZeroZero para um jogo específico"""
-    url = "https://www.zerozero.pt/futebol/todos-os-jogos"
+    """Lê o site jogosna.tv para encontrar o canal exato em Portugal"""
+    url = "https://www.jogosna.tv/"
+    
+    h_simple = normalizar_nome(home_name)
+    a_simple = normalizar_nome(away_name)
+    
+    print(f"🔍 [SCRAPER] A procurar TV para: {h_simple} vs {a_simple}")
+    
     try:
-        async with session.get(url, headers=HEADERS_ZZ, timeout=10) as response:
-            if response.status != 200: return None
+        async with session.get(url, headers=HEADERS_WEB, timeout=12) as response:
+            if response.status != 200: 
+                print(f"⚠️ [SCRAPER] Erro {response.status} ao aceder ao guia de TV.")
+                return None
             
             html = await response.text()
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Procura por todas as linhas de jogos na página
-            jogos = soup.find_all('div', class_='match') 
-            
-            for jogo in jogos:
-                texto_jogo = jogo.get_text().lower()
-                # Verifica se as duas equipas aparecem na mesma linha
-                if home_name.lower() in texto_jogo or away_name.lower() in texto_jogo:
-                    # Tenta encontrar ícones de TV (geralmente tags <img> com alt ou title)
-                    tv_icons = jogo.find_all('img', title=True)
-                    for icon in tv_icons:
-                        title = icon['title'].upper()
-                        if any(x in title for x in ["SPORT TV", "DAZN", "TVI", "SIC", "RTP", "BTV", "CANAL 11"]):
-                            return title
+            # Procura em todos os blocos de jogos (divs ou linhas)
+            blocos = soup.find_all(['div', 'tr', 'li'])
+
+            for bloco in blocos:
+                texto = bloco.get_text().upper()
+                
+                # Se as duas equipas (normalizadas) aparecem no mesmo bloco
+                if h_simple in texto and a_simple in texto:
+                    # Lista de canais PT por prioridade
+                    canais_pt = ["TVI", "SIC", "RTP 1", "RTP", "SPORT TV", "DAZN", "ELEVEN", "BTV", "CANAL 11", "EUROSPORT"]
+                    for canal in canais_pt:
+                        if canal in texto:
+                            # Tenta capturar o número do canal se existir (ex: SPORT TV 1 ou DAZN 2)
+                            match = re.search(rf"{canal}\s*\d+", texto)
+                            resultado = match.group(0) if match else canal
+                            print(f"✅ [SCRAPER] Encontrado: {resultado}")
+                            return resultado
             return None
-    except:
+    except Exception as e:
+        print(f"❌ [SCRAPER] Erro: {e}")
         return None
 
 # ================= FUNÇÕES DE API =================
 
-async def buscar_jogos_async(session, team_id, nome_equipa="Equipa", retries=2):
+async def buscar_jogos_async(session, team_id, nome_equipa="Equipa"):
     agora = time_module.time()
     if team_id in cache_jogos:
         if agora - cache_jogos[team_id]["timestamp"] < CACHE_EXPIRY:
@@ -120,8 +156,8 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga, tv_info=None
             if e.name == nome_jogo and e.start_time.date() == data_inicio.date(): return False
 
         desc = f"🏆 {liga}"
-        if tv_info: desc += f"\n📺 Transmissão: {tv_info}"
-        desc += "\nVamos comentar o jogo no canal de voz!"
+        desc += f"\n📺 Transmissão: **{tv_info if tv_info else 'Não listado'}**"
+        desc += "\n\nVamos comentar o jogo no canal de voz!"
 
         data_fim = data_inicio + timedelta(hours=2)
         canal_voz = guild.get_channel(int(ID_CANAL_VOZ_STR)) if ID_CANAL_VOZ_STR else None
@@ -145,14 +181,15 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio, liga, tv_info=None
 async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, filtrar_liga=None):
     msg = None
     if isinstance(canal_ou_ctx, commands.Context):
-        msg = await canal_ou_ctx.send(f"🚀 A consultar agenda e canais de TV (ZeroZero)...")
+        msg = await canal_ou_ctx.send(f"🚀 A consultar agenda e transmissões 🇵🇹...")
     
     embed = discord.Embed(title=f"⚽ {titulo}", color=0xf1c40f)
     encontrou = False
+    jogos_processados = set() 
+    
     equipas_alvo = {k: EQUIPAS[k] for k in filtro_lista if k in EQUIPAS} if filtro_lista else EQUIPAS
 
     async with aiohttp.ClientSession() as session:
-        # 1. Buscar jogos da API
         tarefas = [buscar_jogos_async(session, info["id"], info["nome"]) for info in equipas_alvo.values()]
         resultados = await asyncio.gather(*tarefas)
 
@@ -166,29 +203,35 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo, titulo, filtro_lista=None, 
                     if data_alvo and dt_jogo.date() != data_alvo: continue
                     if filtrar_liga and filtrar_liga.lower() not in liga_nome.lower(): continue
 
-                    encontrou = True
                     home = j.get("homeTeam", {}).get("name", "N/A")
                     away = j.get("awayTeam", {}).get("name", "N/A")
                     
-                    # 2. SE encontrar jogo hoje/amanhã, tenta buscar TV no ZeroZero
+                    jogo_id = f"{home}_{away}_{dt_jogo.strftime('%Y%m%d')}"
+                    if jogo_id in jogos_processados: continue
+                    
+                    encontrou = True
+                    jogos_processados.add(jogo_id)
+                    
+                    # Procura TV em tempo real no Jogos na TV
                     tv_info = await buscar_tv_portugal(session, home, away)
                     
                     if canal_ou_ctx.guild:
                         await criar_evento_discord(canal_ou_ctx.guild, f"{home} vs {away}", dt_jogo, liga_nome, tv_info)
 
                     hora_f = dt_jogo.strftime('%H:%M') if not (dt_jogo.hour == 12 and dt_jogo.minute == 0) else dt_jogo.strftime('%d/%m (TBD)')
-                    tv_str = f"\n📺 **{tv_info}**" if tv_info else ""
+                    tv_str = f"\n📺 **{tv_info}**" if tv_info else "\n📺 *Não listado no guia*"
                     
                     embed.add_field(
-                        name=f"🥅 {info['nome']}",
+                        name=f"🥅 Jogo do {info['nome']}",
                         value=f"🏆 {liga_nome}\n🕒 **{hora_f}**{tv_str}\n**{home}** vs **{away}**",
                         inline=False
                     )
                     break 
 
     if not encontrou:
-        if msg: await msg.edit(content=f"📅 Sem jogos para {titulo}.")
-        else: await canal_ou_ctx.send(f"📅 Sem jogos para {titulo}.")
+        t = f"📅 Sem jogos para {titulo}."
+        if msg: await msg.edit(content=t)
+        else: await canal_ou_ctx.send(t)
     else:
         if msg: await msg.edit(content=None, embed=embed)
         else: await canal_ou_ctx.send(embed=embed)
@@ -203,14 +246,6 @@ async def amanha(ctx):
     amanha_data = (datetime.now(timezone.utc) + timedelta(days=1)).date()
     await gerar_agenda_data(ctx, amanha_data, "Amanhã")
 
-@bot.command()
-async def comandos(ctx):
-    embed = discord.Embed(title="📖 Guia de Comandos", color=0x3498db)
-    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha` (Com canais de TV 🇵🇹)", inline=False)
-    embed.add_field(name="⚽ Equipas", value=", ".join([f"!{k}" for k in EQUIPAS.keys()]), inline=False)
-    await ctx.send(embed=embed)
-
-# --- Comandos individuais de equipas simplificados para usar o novo motor ---
 async def cmd_equipa(ctx, chave):
     await gerar_agenda_data(ctx, None, f"Agenda: {EQUIPAS[chave]['nome']}", filtro_lista=[chave])
 
@@ -225,9 +260,16 @@ async def porto(ctx): await cmd_equipa(ctx, "porto")
 @bot.command()
 async def sporting(ctx): await cmd_equipa(ctx, "sporting")
 
+@bot.command()
+async def comandos(ctx):
+    embed = discord.Embed(title="📖 Guia de Comandos", color=0x3498db)
+    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha` (Com canais 🇵🇹)", inline=False)
+    embed.add_field(name="⚽ Equipas", value=", ".join([f"!{k}" for k in EQUIPAS.keys()]), inline=False)
+    await ctx.send(embed=embed)
+
 @bot.event
 async def on_ready():
-    print(f'✅ Bot Online com suporte a TV (ZeroZero): {bot.user}')
+    print(f'✅ Bot Online (Guia de TV Real-Time): {bot.user}')
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
