@@ -33,6 +33,84 @@ MUNDIAL_DEMO = [
     {"grupo": "A", "fase": "J3", "data": "25/06/2026", "dia": "Quinta", "hora": "02:00", "jogo": "África do Sul x Coreia do Sul", "canal": "Sport TV 2"}
 ]
 
+# Dicionário de todas as Seleções Participantes e Atalhos do Mundial 2026
+SELECOES_MUNDIAL = {
+    "portugal": "Portugal",
+    "espanha": "Espanha",
+    "franca": "França",
+    "frança": "França",
+    "brasil": "Brasil",
+    "argentina": "Argentina",
+    "alemanha": "Alemanha",
+    "inglaterra": "Inglaterra",
+    "italia": "Itália",
+    "itália": "Itália",
+    "belgica": "Bélgica",
+    "bélgica": "Bélgica",
+    "holanda": "Países Baixos",
+    "paises_baixos": "Países Baixos",
+    "croacia": "Croácia",
+    "croácia": "Croácia",
+    "suica": "Suíça",
+    "suíça": "Suíça",
+    "uruguai": "Uruguai",
+    "colombia": "Colômbia",
+    "colômbia": "Colômbia",
+    "equador": "Equador",
+    "usa": "Estados Unidos",
+    "eua": "Estados Unidos",
+    "mexico": "México",
+    "méxico": "México",
+    "canada": "Canadá",
+    "canadá": "Canadá",
+    "marrocos": "Marrocos",
+    "senegal": "Senegal",
+    "japao": "Japão",
+    "japão": "Japão",
+    "coreia": "Coreia do Sul",
+    "coreia_do_sul": "Coreia do Sul",
+    "australia": "Austrália",
+    "austrália": "Austrália",
+    "arabia": "Arábia Saudita",
+    "arabia_saudita": "Arábia Saudita",
+    "arábia_saudita": "Arábia Saudita",
+    "camaroes": "Camarões",
+    "camarões": "Camarões",
+    "nigeria": "Nigéria",
+    "nigéria": "Nigéria",
+    "egito": "Egito",
+    "argelia": "Argélia",
+    "argélia": "Argélia",
+    "tunisia": "Tunísia",
+    "tunísia": "Tunísia",
+    "costa_rica": "Costa Rica",
+    "jamaica": "Jamaica",
+    "nova_zelandia": "Nova Zelândia",
+    "nova_zelândia": "Nova Zelândia",
+    "catar": "Catar",
+    "irao": "Irão",
+    "irão": "Irão",
+    "chequia": "Chéquia",
+    "chéquia": "Chéquia",
+    "polonia": "Polónia",
+    "polónia": "Polónia",
+    "turquia": "Turquia",
+    "austria": "Áustria",
+    "áustria": "Áustria",
+    "dinamarca": "Dinamarca",
+    "suecia": "Suécia",
+    "suécia": "Suécia",
+    "ucrania": "Ucrânia",
+    "ucrânia": "Ucrânia",
+    "paraguai": "Paraguai",
+    "chile": "Chile",
+    "peru": "Peru",
+    "venezuela": "Venezuela",
+    "gana": "Gana",
+    "africa_do_sul": "África do Sul",
+    "áfrica_do_sul": "África do Sul"
+}
+
 if not DISCORD_TOKEN:
     print("❌ ERRO: DISCORD_TOKEN não encontrado nas variáveis de ambiente.")
     exit()
@@ -379,7 +457,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
     if msg: await msg.edit(content=None, embed=embed)
     else: await canal_ou_ctx.send(embed=embed)
 
-# ================= AGENDAS DE SELEÇÕES NACIONAIS (NOVA FUNÇÃO) =================
+# ================= AGENDAS DE SELEÇÕES NACIONAIS =================
 
 async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
     """Filtra e mostra todos os jogos de uma seleção nacional específica com resultados em tempo real"""
@@ -613,34 +691,31 @@ async def grupo(ctx, letra: str):
     """Mostra a tabela e resultados em direto de um grupo (Ex: !grupo A)"""
     await processar_comando_grupo(ctx, letra)
 
-# --- Comandos das Seleções Populares ---
-
-@bot.command()
-async def portugal(ctx):
-    """Mostra todos os jogos de Portugal"""
-    await gerar_agenda_selecao(ctx, "Portugal")
-
-@bot.command()
-async def espanha(ctx):
-    """Mostra todos os jogos de Espanha"""
-    await gerar_agenda_selecao(ctx, "Espanha")
-
-@bot.command(aliases=['frança'])
-async def franca(ctx):
-    """Mostra todos os jogos de França"""
-    await gerar_agenda_selecao(ctx, "França")
-
-@bot.command()
-async def brasil(ctx):
-    """Mostra todos os jogos do Brasil"""
-    await gerar_agenda_selecao(ctx, "Brasil")
-
 @bot.command(aliases=['país', 'pais'])
 async def selecao(ctx, *, nome: str):
     """Mostra todos os jogos de uma seleção específica (Ex: !selecao Argentina)"""
     await gerar_agenda_selecao(ctx, nome)
 
-# ----------------------------------------
+# ================= REGISTO DINÂMICO DE COMANDOS PARA TODAS AS SELEÇÕES =================
+
+def criar_comando_selecao(nome_exibicao):
+    """Função fábrica para evitar problemas de late-binding no loop de comandos"""
+    async def _comando(ctx):
+        await gerar_agenda_selecao(ctx, nome_exibicao)
+    return _comando
+
+# Criação dinâmica de comandos diretos para todas as seleções conhecidas
+for cmd_name, display_name in SELECOES_MUNDIAL.items():
+    if cmd_name not in bot.all_commands:
+        cmd_func = criar_comando_selecao(display_name)
+        cmd_obj = commands.Command(
+            cmd_func, 
+            name=cmd_name, 
+            help=f"Mostra a agenda completa e resultados em tempo real de {display_name}"
+        )
+        bot.add_command(cmd_obj)
+
+# ----------------------------------------------------------------------------------------
 
 @bot.command()
 async def comandos(ctx):
@@ -648,7 +723,7 @@ async def comandos(ctx):
     embed.add_field(name="⏰ Agendas Diárias", value="`!hoje`, `!amanha` (Agenda híbrida de canais e resultados em direto)", inline=False)
     embed.add_field(name="📅 Pesquisa de Data", value="`!mundial DD/MM/AAAA` (Ex: `!mundial 11/06/2026`)", inline=False)
     embed.add_field(name="📊 Grupos & Classificações", value="`!grupo A` ou comandos rápidos: `!grupoa` ... `!grupol` (Tabela ultra-compacta para telemóveis)", inline=False)
-    embed.add_field(name="⚽ Seleções Nacionais", value="Comandos diretos: `!portugal`, `!espanha`, `!frança`, `!brasil` ou pesquisa genérica: `!selecao <nome>` (Ex: `!selecao Argentina`)", inline=False)
+    embed.add_field(name="⚽ Seleções Nacionais", value="Comandos diretos para TODAS as seleções do Mundial (Ex: `!portugal`, `!brasil`, `!argentina`, `!alemanha`, `!marrocos`, etc.) ou pesquisa genérica: `!selecao <nome>`", inline=False)
     await ctx.send(embed=embed)
 
 @bot.event
