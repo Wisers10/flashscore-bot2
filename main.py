@@ -2,50 +2,42 @@ import discord
 from discord.ext import commands, tasks
 import aiohttp
 import asyncio
-from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, time, timezone
 import os
 import time as time_module
 import re
+import csv
+import unicodedata
 
 # ================= CONFIGURAÇÕES =================
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 API_KEY = os.getenv('API_KEY', '6d06a69f23msh5f3ad35148c8b68p1235b8jsnb94b0198382b')
 
-# IDs dos canais de notificações (Atualizado para apenas um canal conforme pedido)
-ID_CANAIS_STR = os.getenv('ID_CANAL_NOTIFICACOES', '1501014726111395850')
-CANAIS_NOTIFICACOES = [int(i.strip()) for i in ID_CANAIS_STR.split(',') if i.strip().isdigit()]
+# ID do canal de notificações automáticas (Tua escolha)
+ID_CANAL_NOTIFICACOES = 1501014726111395850
 ID_CANAL_VOZ_STR = os.getenv('ID_CANAL_VOZ', '813485447719813207') 
 
 # Fuso horário de Portugal (Ajuste manual de +1h sobre o UTC)
 OFFSET_PT = timedelta(hours=1)
 
-CACHE_EXPIRY = 3600 
+CACHE_EXPIRY = 300 # Cache rápido de 5 minutos para os resultados em direto da API
 cache_jogos = {}
 
+# Dados de salvaguarda (Caso o mundial.csv ainda não esteja na pasta)
+MUNDIAL_DEMO = [
+    {"grupo": "A", "fase": "J1", "data": "11/06/2026", "dia": "Quinta", "hora": "20:00", "jogo": "México x África do Sul", "canal": "RTP 1 / LiveModeTV"},
+    {"grupo": "A", "fase": "J1", "data": "12/06/2026", "dia": "Sexta", "hora": "03:00", "jogo": "Coreia do Sul x Chéquia", "canal": "Sport TV 2"},
+    {"grupo": "A", "fase": "J2", "data": "18/06/2026", "dia": "Quinta", "hora": "17:00", "jogo": "Chéquia x África do Sul", "canal": "Sport TV 1"},
+    {"grupo": "A", "fase": "J2", "data": "19/06/2026", "dia": "Sexta", "hora": "02:00", "jogo": "México x Coreia do Sul", "canal": "Sport TV 1"},
+    {"grupo": "A", "fase": "J3", "data": "25/06/2026", "dia": "Quinta", "hora": "02:00", "jogo": "Chéquia x México", "canal": "Sport TV 1"},
+    {"grupo": "A", "fase": "J3", "data": "25/06/2026", "dia": "Quinta", "hora": "02:00", "jogo": "África do Sul x Coreia do Sul", "canal": "Sport TV 2"}
+]
+
 if not DISCORD_TOKEN:
-    print("❌ ERRO: DISCORD_TOKEN não encontrado.")
+    print("❌ ERRO: DISCORD_TOKEN não encontrado nas variáveis de ambiente.")
     exit()
 
 api_semaphore = asyncio.Semaphore(1)
-
-EQUIPAS = {
-    "benfica": {"id": 3006, "nome": "SL Benfica", "cor": 0xff0000},
-    "porto": {"id": 3002, "nome": "FC Porto", "cor": 0x0000ff},
-    "sporting": {"id": 3001, "nome": "Sporting CP", "cor": 0x00ff00},
-    "braga": {"id": 2999, "nome": "SC Braga", "cor": 0xce1126}, 
-    "portugal": {"id": 4704, "nome": "Seleção Portuguesa", "cor": 0x006600},
-    "liverpool": {"id": 44, "nome": "Liverpool", "cor": 0xc8102E},
-    "manunited": {"id": 35, "nome": "Manchester United", "cor": 0xDA291C},
-    "mancity": {"id": 17, "nome": "Manchester City", "cor": 0x6CABDD},
-    "arsenal": {"id": 42, "nome": "Arsenal", "cor": 0xEF0107},
-    "chelsea": {"id": 38, "nome": "Chelsea FC", "cor": 0x034694},
-    "tottenham": {"id": 33, "nome": "Tottenham Hotspur", "cor": 0x132257},
-    "realmadrid": {"id": 2829, "nome": "Real Madrid", "cor": 0xffffff},
-    "barcelona": {"id": 2817, "nome": "FC Barcelona", "cor": 0x004D98},
-    "psg": {"id": 1644, "nome": "PSG", "cor": 0x004170},
-    "bayern": {"id": 2672, "nome": "Bayern Munich", "cor": 0xDC052D}
-}
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -57,178 +49,433 @@ HEADERS_API = {
     'x-rapidapi-key': API_KEY
 }
 
-HEADERS_WEB = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept-Language': 'pt-PT,pt;q=0.9,en;q=0.8'
-}
+# ================= CARREGAMENTO DO CSV DO EXCEL =================
 
-# ================= FUNÇÕES DE UTILIDADE =================
-
-def normalizar_nome(nome):
-    nome = nome.upper()
-    substituicoes = {
-        "PARIS SAINT-GERMAIN": "PSG", "BAYERN MÜNCHEN": "BAYERN", "BAYERN MUNICH": "BAYERN",
-        "MANCHESTER CITY": "MAN CITY", "MANCHESTER UNITED": "MAN UTD", "SPORTING CP": "SPORTING",
-        "SL BENFICA": "BENFICA", "FC PORTO": "PORTO", "SC BRAGA": "BRAGA"
-    }
-    for original, novo in substituicoes.items():
-        if original in nome: return novo
-    return re.sub(r'\b(FC|SL|SC|CP|REAL|ST|CLUB|ATLETICO)\b', '', nome).strip()
-
-# ================= MOTOR DE BUSCA DE TV (JOGOSNA.TV) =================
-
-async def buscar_tv_portugal(session, home_name, away_name):
-    url = "https://www.jogosna.tv/"
-    h_simple = normalizar_nome(home_name)
-    a_simple = normalizar_nome(away_name)
+def carregar_mundial_csv():
+    """Lê o mundial.csv para estruturar os jogos e canais"""
+    caminho_csv = "mundial.csv"
+    if not os.path.exists(caminho_csv):
+        print("ℹ️ [SISTEMA] 'mundial.csv' não encontrado. A usar dados padrão de teste (Grupo A).")
+        return MUNDIAL_DEMO
+    
+    jogos = []
+    current_group = None
     try:
-        async with session.get(url, headers=HEADERS_WEB, timeout=12) as response:
-            if response.status != 200: return None
-            html = await response.text()
-            soup = BeautifulSoup(html, 'html.parser')
-            blocos = soup.find_all(['div', 'tr', 'li'])
-            for bloco in blocos:
-                texto = bloco.get_text().upper()
-                if h_simple in texto and a_simple in texto:
-                    canais_pt = ["TVI", "SIC", "RTP 1", "RTP", "SPORT TV", "DAZN", "ELEVEN", "BTV", "CANAL 11", "EUROSPORT"]
-                    for canal in canais_pt:
-                        if canal in texto:
-                            match = re.search(rf"{canal}\s*\d+", texto)
-                            return match.group(0) if match else canal
-            return None
-    except: return None
+        with open(caminho_csv, mode='r', encoding='utf-8-sig') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                row = [cell.strip() for cell in row if cell]
+                if not row: continue
+                
+                # Deteta se a linha é um cabeçalho de Grupo
+                grupo_encontrado = False
+                for cell in row:
+                    m = re.search(r'GRUPO\s+([A-L])', cell, re.IGNORECASE)
+                    if m:
+                        current_group = m.group(1).upper()
+                        grupo_encontrado = True
+                        break
+                if grupo_encontrado: continue
+                
+                if current_group and len(row) >= 5:
+                    data_str = row[1]
+                    if re.match(r'\d{1,2}[/\-]\d{1,2}[/\-]\d{4}', data_str):
+                        jogo_str = row[4]
+                        canal_str = row[8] if len(row) >= 9 else "Por definir"
+                        
+                        jogos.append({
+                            "grupo": current_group,
+                            "fase": row[0],
+                            "data": data_str,
+                            "dia": row[2],
+                            "hora": row[3],
+                            "jogo": jogo_str,
+                            "canal": canal_str
+                        })
+        return jogos
+    except Exception as e:
+        print(f"❌ [SISTEMA] Erro ao carregar mundial.csv: {e}")
+        return MUNDIAL_DEMO
 
-# ================= FUNÇÕES DE API =================
+# ================= INTELIGÊNCIA DE CORRESPONDÊNCIA DE EQUIPAS =================
 
-async def buscar_jogos_async(session, team_id, nome_equipa="Equipa"):
+def simplificar_nome(nome):
+    """Normaliza acentos e simplifica nomes de países para cruzar PT <-> EN"""
+    nome = ''.join(c for c in unicodedata.normalize('NFD', nome) if unicodedata.category(c) != 'Mn')
+    nome = nome.lower()
+    
+    # Traduções comuns para bater certo com a API
+    traducoes = {
+        "republica checa": "czechia", "chequia": "czechia", "czech republic": "czechia",
+        "coreia do sul": "south korea", "korea republic": "south korea",
+        "alemanha": "germany", "espanha": "spain", "franca": "france",
+        "belgica": "belgium", "inglaterra": "england", "suica": "switzerland",
+        "suecia": "sweden", "marrocos": "morocco", "camaroes": "cameroon",
+        "croacia": "croatia", "brasil": "brazil", "estados unidos": "usa",
+        "united states": "usa", "arabia saudita": "saudi arabia", "africa do sul": "south africa"
+    }
+    
+    for k, v in traducoes.items():
+        nome = nome.replace(k, v)
+        
+    # Remove termos genéricos
+    for termo in ["fc", "sl", "sc", "cp", "real", "st", "club", "atletico", "de", "do", "da"]:
+        nome = re.sub(rf'\b{termo}\b', '', nome)
+        
+    return nome.strip()
+
+def equipas_correspondem(csv_casa, csv_fora, api_casa, api_fora):
+    """Compara os nomes das equipas do Excel com as da API usando lógica flexível"""
+    c_casa = simplificar_nome(csv_casa)
+    c_fora = simplificar_nome(csv_fora)
+    a_casa = simplificar_nome(api_casa)
+    a_fora = simplificar_nome(api_fora)
+    
+    palavras_c_casa = set(c_casa.split())
+    palavras_c_fora = set(c_fora.split())
+    palavras_a_casa = set(a_casa.split())
+    palavras_a_fora = set(a_fora.split())
+    
+    match_casa = bool(palavras_c_casa & palavras_a_casa) or c_casa in a_casa or a_casa in c_casa
+    match_fora = bool(palavras_c_fora & palavras_a_fora) or c_fora in a_fora or a_fora in c_fora
+    
+    return match_casa and match_fora
+
+# ================= INTEGRAÇÃO COM A API SOFASPORT =================
+
+async def obter_season_id(session):
+    """Obtém dinamicamente o ID da temporada do Mundial 2026"""
     agora = time_module.time()
-    if team_id in cache_jogos:
-        if agora - cache_jogos[team_id]["timestamp"] < CACHE_EXPIRY:
-            return cache_jogos[team_id]["data"]
+    if "season_id" in cache_jogos:
+        if agora - cache_jogos["season_id"]["timestamp"] < 86400: # Cache de 24h
+            return cache_jogos["season_id"]["data"]
 
-    url = "https://sofasport.p.rapidapi.com/v1/teams/events"
-    params = {"team_id": str(team_id), "course_events": "next", "page": "0"}
+    url = "https://sofasport.p.rapidapi.com/v1/unique-tournaments/seasons"
+    params = {"unique_tournament_id": "16"} # 16 é o ID do Campeonato do Mundo
     
     async with api_semaphore:
         try:
-            async with session.get(url, headers=HEADERS_API, params=params, timeout=15) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    eventos = data.get("data", {}).get("events", [])
-                    cache_jogos[team_id] = {"data": eventos, "timestamp": agora}
+            async with session.get(url, headers=HEADERS_API, params=params, timeout=10) as r:
+                if r.status == 200:
+                    res = await r.json()
+                    seasons = res.get("data", [])
+                    for s in seasons:
+                        if "2026" in s.get("name", "") or s.get("year") == "2026":
+                            sid = s.get("id")
+                            cache_jogos["season_id"] = {"data": sid, "timestamp": agora}
+                            return sid
+                    if seasons:
+                        sid = seasons[0].get("id")
+                        cache_jogos["season_id"] = {"data": sid, "timestamp": agora}
+                        return sid
+        except Exception as e:
+            print(f"⚠️ Erro ao procurar season_id na API: {e}")
+    return 52561 # ID Fallback padrão de segurança
+
+async def obter_resultados_api(session, season_id):
+    """Descarrega os resultados da API em tempo real (com cache de 5min)"""
+    agora = time_module.time()
+    if "api_events" in cache_jogos:
+        if agora - cache_jogos["api_events"]["timestamp"] < CACHE_EXPIRY:
+            return cache_jogos["api_events"]["data"]
+
+    url = "https://sofasport.p.rapidapi.com/v1/seasons/events"
+    # Pede a página 0 para obter os eventos em progresso/recentes
+    params = {"seasons_id": str(season_id), "unique_tournament_id": "16", "page": "0"}
+    
+    async with api_semaphore:
+        try:
+            async with session.get(url, headers=HEADERS_API, params=params, timeout=15) as r:
+                if r.status == 200:
+                    res = await r.json()
+                    eventos = res.get("data", {}).get("events", []) or res.get("data", [])
+                    cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
                     return eventos
-                return []
-        except: return []
+        except Exception as e:
+            print(f"⚠️ Erro ao aceder a eventos do Mundial na API: {e}")
+    return []
 
-async def criar_evento_discord(guild, nome_jogo, data_inicio_utc, liga, tv_info=None):
-    data_pt = data_inicio_utc.replace(tzinfo=timezone.utc).astimezone(timezone(OFFSET_PT))
-    agora_pt = datetime.now(timezone(OFFSET_PT))
-    if data_pt < agora_pt or (data_pt.hour == 13 and data_pt.minute == 0): return False
-    try:
-        eventos_atuais = await guild.fetch_scheduled_events()
-        for e in eventos_atuais:
-            if e.name == nome_jogo and e.start_time.astimezone(timezone(OFFSET_PT)).date() == data_pt.date(): return False
-        desc = f"🏆 {liga}\n📺 Transmissão: **{tv_info if tv_info else 'Não listado'}**\n\nVamos comentar o jogo no canal de voz!"
-        data_fim = data_pt + timedelta(hours=2)
-        canal_voz = guild.get_channel(int(ID_CANAL_VOZ_STR)) if ID_CANAL_VOZ_STR else None
-        if canal_voz:
-            await guild.create_scheduled_event(name=nome_jogo, description=desc, start_time=data_pt, end_time=data_fim, entity_type=discord.EntityType.voice, channel=canal_voz, privacy_level=discord.PrivacyLevel.guild_only)
-        else:
-            await guild.create_scheduled_event(name=nome_jogo, description=desc, start_time=data_pt, end_time=data_fim, entity_type=discord.EntityType.external, location="Televisão", privacy_level=discord.PrivacyLevel.guild_only)
-        return True
-    except: return False
+async def obter_tabela_api(session, season_id, letra_grupo):
+    """Obtém as classificações oficiais diretamente de cada grupo da API"""
+    cache_key = f"standings_{letra_grupo.upper()}"
+    agora = time_module.time()
+    if cache_key in cache_jogos:
+        if agora - cache_jogos[cache_key]["timestamp"] < CACHE_EXPIRY:
+            return cache_jogos[cache_key]["data"]
 
-# ================= AGENDAS =================
+    url = "https://sofasport.p.rapidapi.com/v1/seasons/standings"
+    params = {"seasons_id": str(season_id), "unique_tournament_id": "16", "standing_type": "total"}
+    
+    async with api_semaphore:
+        try:
+            async with session.get(url, headers=HEADERS_API, params=params, timeout=15) as r:
+                if r.status == 200:
+                    res = await r.json()
+                    grupos_data = res.get("data", []) or res.get("data", {}).get("standings", [])
+                    
+                    for g in grupos_data:
+                        nome_grupo = g.get("name", "").upper()
+                        # Procura "GROUP A", "GRUPO A" ou se termina em " A"
+                        if f"GROUP {letra_grupo.upper()}" in nome_grupo or f"GRUPO {letra_grupo.upper()}" in nome_grupo or nome_grupo.endswith(f" {letra_grupo.upper()}"):
+                            cache_jogos[cache_key] = {"data": g, "timestamp": agora}
+                            return g
+        except Exception as e:
+            print(f"⚠️ Erro ao obter standings da API: {e}")
+    return None
 
-async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo, filtro_lista=None, filtrar_liga=None):
+# ================= AGENDAS HÍBRIDAS =================
+
+async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
     msg = None
     if isinstance(canal_ou_ctx, commands.Context):
-        msg = await canal_ou_ctx.send(f"🚀 A consultar agenda e transmissões 🇵🇹...")
+        msg = await canal_ou_ctx.send(f"🚀 A ligar ao motor híbrido (CSV + API em direto)...")
     
-    embed = discord.Embed(title=f"⚽ {titulo}", color=0xf1c40f)
+    embed = discord.Embed(title=f"🏆 {titulo}", color=0xe67e22)
     encontrou = False
-    jogos_processados = set() 
-    equipas_alvo = {k: EQUIPAS[k] for k in filtro_lista if k in EQUIPAS} if filtro_lista else EQUIPAS
+    
+    # 1. Carrega os jogos da data a partir do teu Excel/CSV
+    data_str_pesquisa = data_alvo_pt.strftime("%d/%m/%Y") if data_alvo_pt else None
+    jogos_csv = carregar_mundial_csv()
+    jogos_do_dia = [j for j in jogos_csv if not data_str_pesquisa or j["data"] == data_str_pesquisa]
+    
+    if not jogos_do_dia:
+        aviso = f"📅 Sem jogos do Mundial agendados para {titulo}."
+        if msg: await msg.edit(content=aviso)
+        else: await canal_ou_ctx.send(aviso)
+        return
 
+    # 2. Liga-se à API para descarregar golos e estados em tempo real
     async with aiohttp.ClientSession() as session:
-        tarefas = [buscar_jogos_async(session, info["id"], info["nome"]) for info in equipas_alvo.values()]
-        resultados = await asyncio.gather(*tarefas)
-        for (chave, info), eventos in zip(equipas_alvo.items(), resultados):
-            for j in eventos:
-                ts = j.get("startTimestamp")
-                if ts:
-                    dt_utc = datetime.fromtimestamp(ts, tz=timezone.utc)
-                    dt_pt = dt_utc + OFFSET_PT
-                    if data_alvo_pt and dt_pt.date() != data_alvo_pt: continue
-                    if filtrar_liga and filtrar_liga.lower() not in j.get("tournament", {}).get("name", "").lower(): continue
-                    home, away = j.get("homeTeam", {}).get("name", "N/A"), j.get("awayTeam", {}).get("name", "N/A")
-                    jogo_id = f"{home}_{away}_{dt_pt.strftime('%Y%m%d')}"
-                    if jogo_id in jogos_processados: continue
-                    encontrou = True
-                    jogos_processados.add(jogo_id)
-                    tv_info = await buscar_tv_portugal(session, home, away)
-                    if canal_ou_ctx.guild: await criar_evento_discord(canal_ou_ctx.guild, f"{home} vs {away}", dt_utc, j.get("tournament", {}).get("name", "Competição"), tv_info)
-                    hora_f = dt_pt.strftime('%H:%M') if not (dt_pt.hour == 13 and dt_pt.minute == 0) else dt_pt.strftime('%d/%m (TBD)')
-                    embed.add_field(name=f"🥅 Jogo do {info['nome']}", value=f"🏆 {j.get('tournament',{}).get('name')}\n🕒 **{hora_f}**\n📺 **{tv_info if tv_info else 'Não listado'}**\n**{home}** vs **{away}**", inline=False)
-                    break 
+        season_id = await obter_season_id(session)
+        eventos_api = await obter_resultados_api(session, season_id)
+        
+        for j_csv in jogos_do_dia:
+            encontrou = True
+            nome_jogo = j_csv["jogo"]
+            hora = j_csv["hora"]
+            canal = j_csv["canal"]
+            
+            # Divide "México x África do Sul" -> "México" e "África do Sul"
+            partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', nome_jogo)]
+            
+            resultado_str = "vs"
+            status_direto = ""
+            
+            if len(partes) == 2:
+                casa, fora = partes[0], partes[1]
+                # Tenta emparelhar com a API em tempo real
+                match_api = None
+                for ev in eventos_api:
+                    api_casa = ev.get("homeTeam", {}).get("name", "")
+                    api_fora = ev.get("awayTeam", {}).get("name", "")
+                    if equipas_correspondem(casa, fora, api_casa, api_fora):
+                        match_api = ev
+                        break
+                
+                if match_api:
+                    gc = match_api.get("homeScore", {}).get("current")
+                    gf = match_api.get("awayScore", {}).get("current")
+                    
+                    if gc is not None and gf is not None:
+                        resultado_str = f"**{gc}** - **{gf}**"
+                        
+                        # Verifica se o jogo está a decorrer
+                        status_type = match_api.get("status", {}).get("type", "")
+                        status_desc = match_api.get("status", {}).get("description", "")
+                        if status_type == "inprogress":
+                            status_direto = f" 🟢 *({status_desc})*"
+                        elif status_type == "finished":
+                            status_direto = " 🔴 *(Terminado)*"
+            
+            nome_jogo_formatado = f"**{partes[0]}** {resultado_str} **{partes[1]}**{status_direto}" if len(partes) == 2 else f"**{nome_jogo}**"
+            
+            embed.add_field(
+                name=f"🥅 Grupo {j_csv['grupo']} — {j_csv['fase']}",
+                value=f"🕒 **{hora}** | 📺 **{canal}**\n⚔️ {nome_jogo_formatado}",
+                inline=False
+            )
+            
+            # Agenda automaticamente o evento de voz se ainda não tiver começado
+            if canal_ou_ctx.guild and hora != "TBD":
+                try:
+                    dia, mes, ano = map(int, j_csv["data"].split('/'))
+                    hora_h, hora_m = map(int, hora.split(':'))
+                    dt_jogo_pt = datetime(ano, mes, dia, hora_h, hora_m, tzinfo=timezone(OFFSET_PT))
+                    dt_jogo_utc = dt_jogo_pt.astimezone(timezone.utc)
+                    await criar_evento_discord(canal_ou_ctx.guild, nome_jogo, dt_jogo_utc, f"Mundial 2026 (Grupo {j_csv['grupo']})", canal)
+                except: pass
 
-    if not encontrou:
-        t = f"📅 Sem jogos para {titulo}."
-        if msg: await msg.edit(content=t)
-        else: await canal_ou_ctx.send(t)
-    else:
-        if msg: await msg.edit(content=None, embed=embed)
-        else: await canal_ou_ctx.send(embed=embed)
+    if msg: await msg.edit(content=None, embed=embed)
+    else: await canal_ou_ctx.send(embed=embed)
+
+# ================= COMANDO DE GRUPO (CLASSIFICAÇÃO AUTOMÁTICA) =================
+
+async def processar_comando_grupo(ctx, letra_grupo):
+    letra_grupo = letra_grupo.upper()
+    await ctx.send(f"📊 A aceder à tabela oficial da API para o **Grupo {letra_grupo}**...")
+    
+    async with aiohttp.ClientSession() as session:
+        season_id = await obter_season_id(session)
+        tabela_data = await obter_tabela_api(session, season_id, letra_grupo)
+        
+        if not tabela_data:
+            return await ctx.send(f"⚠️ Não foi possível obter as classificações em direto para o **Grupo {letra_grupo}**. Tenta novamente mais tarde.")
+
+        embed = discord.Embed(title=f"🏆 MUNDIAL 2026 — GRUPO {letra_grupo}", color=0x2ecc71)
+        
+        # Desenha a classificação da API formatada alinhada
+        linhas_tabela = [f"{'Seleção':<15} | J | V | E | D | GM | GS | DG | Pts"]
+        linhas_tabela.append("-" * 52)
+        
+        rows = tabela_data.get("rows", [])
+        for r in rows:
+            # Traduz ou ajusta o nome da equipa da API para exibição bonita
+            nome_equipa = r.get("team", {}).get("name", "N/A")
+            # Substituições de estética em português se necessário
+            nome_equipa = "África do Sul" if nome_equipa == "South Africa" else nome_equipa
+            nome_equipa = "Chéquia" if nome_equipa == "Czechia" or nome_equipa == "Czech Republic" else nome_equipa
+            nome_equipa = "Coreia do Sul" if nome_equipa == "South Korea" or "Korea" in nome_equipa else nome_equipa
+            nome_equipa = "México" if nome_equipa == "Mexico" else nome_equipa
+            
+            nome_f = f"{nome_equipa:<15}"[:15]
+            
+            pts = r.get("points", 0)
+            j = r.get("matches", 0)
+            v = r.get("wins", 0)
+            e = r.get("draws", 0)
+            d = r.get("losses", 0)
+            gm = r.get("goalsFor", 0)
+            gs = r.get("goalsAgainst", 0)
+            
+            dg = gm - gs
+            dg_str = f"{dg:+2}" if dg != 0 else " 0"
+            
+            linha = (
+                f"{nome_f} | {j} | {v} | {e} | {d} | "
+                f"{gm:>2} | {gs:>2} | {dg_str:>2} | {pts:>2}"
+            )
+            linhas_tabela.append(linha)
+            
+        tabela_texto = "```\n" + "\n".join(linhas_tabela) + "\n```"
+        embed.add_field(name="📊 Tabela Classificativa (Em Direto)", value=tabela_texto, inline=False)
+        
+        # Mostra o calendário e os resultados do grupo extraídos do CSV enriquecido com golos da API
+        eventos_api = await obter_resultados_api(session, season_id)
+        jogos_csv = carregar_mundial_csv()
+        jogos_grupo = [jg for jg in jogos_csv if jg["grupo"] == letra_grupo]
+        
+        linhas_jogos = []
+        for j_g in jogos_grupo:
+            nome_jogo = j_g["jogo"]
+            partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', nome_jogo)]
+            
+            resultado_str = "vs"
+            if len(partes) == 2:
+                match_api = None
+                for ev in eventos_api:
+                    if equipas_correspondem(partes[0], partes[1], ev.get("homeTeam", {}).get("name", ""), ev.get("awayTeam", {}).get("name", "")):
+                        match_api = ev
+                        break
+                if match_api:
+                    gc = match_api.get("homeScore", {}).get("current")
+                    gf = match_api.get("awayScore", {}).get("current")
+                    if gc is not None and gf is not None:
+                        resultado_str = f"**{gc}** - **{gf}**"
+                        
+            jogo_f = f"**{partes[0]}** {resultado_str} **{partes[1]}**" if len(partes) == 2 else nome_jogo
+            linhas_jogos.append(f"📅 {j_g['data']} | 🕒 {j_g['hora']} — {jogo_f} *(📺 {j_g['canal']})*")
+            
+        embed.add_field(name="🥅 Calendário & Resultados", value="\n".join(linhas_jogos), inline=False)
+        await ctx.send(embed=embed)
 
 # ================= TAREFA AUTOMÁTICA DIÁRIA =================
 
 @tasks.loop(time=time(hour=8, minute=0, tzinfo=timezone.utc)) # 09:00 Portugal (UTC+1)
 async def notificacao_diaria():
-    print(f"⏰ [SISTEMA] A executar tarefa agendada para {len(CANAIS_NOTIFICACOES)} canais...")
-    hoje_pt = (datetime.now(timezone.utc) + OFFSET_PT).date()
-    for id_canal in CANAIS_NOTIFICACOES:
-        canal = bot.get_channel(id_canal)
-        if canal:
-            print(f"   - A enviar agenda automática para canal ID: {id_canal}")
-            await gerar_agenda_data(canal, hoje_pt, "Agenda de Hoje")
-            await asyncio.sleep(2)
+    print(f"⏰ [AUTOMÁTICO] A enviar agenda diária do Mundial...")
+    canal = bot.get_channel(ID_CANAL_NOTIFICACOES)
+    if canal:
+        hoje_pt = (datetime.now(timezone.utc) + OFFSET_PT).date()
+        await gerar_agenda_data(canal, hoje_pt, "Mundial 2026: Agenda de Hoje")
 
 # ================= COMANDOS =================
 
 @bot.command()
 async def hoje(ctx):
     hoje_pt = (datetime.now(timezone.utc) + OFFSET_PT).date()
-    await gerar_agenda_data(ctx, hoje_pt, "Hoje")
+    await gerar_agenda_data(ctx, hoje_pt, "Mundial 2026 — Jogos de Hoje")
 
 @bot.command()
 async def amanha(ctx):
-    amanha_data = (datetime.now(timezone.utc) + OFFSET_PT + timedelta(days=1)).date()
-    await gerar_agenda_data(ctx, amanha_data, "Amanhã")
-
-async def cmd_equipa(ctx, chave):
-    await gerar_agenda_data(ctx, None, f"Agenda: {EQUIPAS[chave]['nome']}", filtro_lista=[chave])
+    amanha_pt = (datetime.now(timezone.utc) + OFFSET_PT + timedelta(days=1)).date()
+    await gerar_agenda_data(ctx, amanha_pt, "Mundial 2026 — Jogos de Amanhã")
 
 @bot.command()
-async def psg(ctx): await cmd_equipa(ctx, "psg")
+async def mundial(ctx, data_pesquisa: str = None):
+    """Mostra os jogos de uma data específica (ex: !mundial 11/06/2026)"""
+    if data_pesquisa:
+        try:
+            data_validada = datetime.strptime(data_pesquisa, "%d/%m/%Y").date()
+            await gerar_agenda_data(ctx, data_validada, f"Mundial 2026 — Agenda de {data_pesquisa}")
+        except ValueError:
+            await ctx.send("❌ Formato de data inválido. Usa: `DD/MM/AAAA` (Ex: `!mundial 11/06/2026`)")
+    else:
+        hoje_pt = (datetime.now(timezone.utc) + OFFSET_PT).date()
+        await gerar_agenda_data(ctx, hoje_pt, "Mundial 2026 — Jogos de Hoje")
+
+# Comandos Rápidos de Grupos (!grupoa, !grupob, etc.)
+@bot.command(aliases=['grupoa', 'grupoA'])
+async def grupo_a(ctx): await processar_comando_grupo(ctx, "A")
+
+@bot.command(aliases=['grupob', 'grupoB'])
+async def grupo_b(ctx): await processar_comando_grupo(ctx, "B")
+
+@bot.command(aliases=['grupoc', 'grupoC'])
+async def grupo_c(ctx): await processar_comando_grupo(ctx, "C")
+
+@bot.command(aliases=['grupod', 'grupoD'])
+async def grupo_d(ctx): await processar_comando_grupo(ctx, "D")
+
+@bot.command(aliases=['grupoe', 'grupoE'])
+async def grupo_e(ctx): await processar_comando_grupo(ctx, "E")
+
+@bot.command(aliases=['grupof', 'grupoF'])
+async def grupo_f(ctx): await processar_comando_grupo(ctx, "F")
+
+@bot.command(aliases=['grupog', 'grupoG'])
+async def grupo_g(ctx): await processar_comando_grupo(ctx, "G")
+
+@bot.command(aliases=['grupoh', 'grupoH'])
+async def grupo_h(ctx): await processar_comando_grupo(ctx, "H")
+
+@bot.command(aliases=['grupoi', 'grupoI'])
+async def grupo_i(ctx): await processar_comando_grupo(ctx, "I")
+
+@bot.command(aliases=['grupoj', 'grupoJ'])
+async def grupo_j(ctx): await processar_comando_grupo(ctx, "J")
+
+@bot.command(aliases=['grupok', 'grupoK'])
+async def grupo_k(ctx): await processar_comando_grupo(ctx, "K")
+
+@bot.command(aliases=['grupol', 'grupoL'])
+async def grupo_l(ctx): await processar_comando_grupo(ctx, "L")
+
 @bot.command()
-async def bayern(ctx): await cmd_equipa(ctx, "bayern")
-@bot.command()
-async def benfica(ctx): await cmd_equipa(ctx, "benfica")
-@bot.command()
-async def porto(ctx): await cmd_equipa(ctx, "porto")
-@bot.command()
-async def sporting(ctx): await cmd_equipa(ctx, "sporting")
+async def grupo(ctx, letra: str):
+    """Mostra a tabela e resultados em direto de um grupo (Ex: !grupo A)"""
+    await processar_comando_grupo(ctx, letra)
 
 @bot.command()
 async def comandos(ctx):
-    embed = discord.Embed(title="📖 Guia de Comandos", color=0x3498db)
-    embed.add_field(name="⏰ Agendas", value="`!hoje`, `!amanha` (Horário de Portugal 🇵🇹)", inline=False)
-    embed.add_field(name="⚽ Equipas", value=", ".join([f"!{k}" for k in EQUIPAS.keys()]), inline=False)
+    embed = discord.Embed(title="📖 Guia de Comandos — Mundial 2026", color=0x3498db)
+    embed.add_field(name="⏰ Agendas Diárias", value="`!hoje`, `!amanha` (Agenda híbrida de canais e resultados em direto)", inline=False)
+    embed.add_field(name="📅 Pesquisa de Data", value="`!mundial DD/MM/AAAA` (Ex: `!mundial 11/06/2026`)", inline=False)
+    embed.add_field(name="📊 Grupos & Classificações", value="`!grupo A` ou comandos rápidos: `!grupoa` ... `!grupol` (Mostra tabela em direto atualizada pela API oficial e resultados)", inline=False)
     await ctx.send(embed=embed)
 
 @bot.event
 async def on_ready():
-    print(f'✅ Bot Online (Automação Ativa): {bot.user}')
+    print(f'✅ Bot Mundial 2026 Híbrido Online!')
     if not notificacao_diaria.is_running():
         notificacao_diaria.start()
 
