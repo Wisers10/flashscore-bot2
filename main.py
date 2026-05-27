@@ -79,20 +79,23 @@ def carregar_mundial_csv():
                         break
                 if grupo_encontrado: continue
                 
+                # Garante que a linha tem sempre pelo menos 9 colunas para evitar desalinhamento nas leituras
+                row = row + [""] * (9 - len(row))
+                
                 # Garante que a linha tem os campos mínimos e uma data válida na coluna 1
                 if current_group and len(row) >= 5:
                     data_str = row[1]
                     if re.match(r'\d{1,2}[/\-]\d{1,2}[/\-]\d{4}', data_str):
                         jogo_str = row[4]
                         # A coluna 8 (Canal) agora estará sempre na posição correta
-                        canal_str = row[8] if len(row) >= 9 and row[8] else "Por definir"
+                        canal_str = row[8] if row[8] else "Por definir"
                         
                         jogos.append({
                             "grupo": current_group,
-                            "fase": row[0] if len(row) >= 1 else "",
+                            "fase": row[0] if row[0] else "",
                             "data": data_str,
-                            "dia": row[2] if len(row) >= 3 else "",
-                            "hora": row[3] if len(row) >= 4 else "",
+                            "dia": row[2] if row[2] else "",
+                            "hora": row[3] if row[3] else "",
                             "jogo": jogo_str,
                             "canal": canal_str
                         })
@@ -103,7 +106,7 @@ def carregar_mundial_csv():
 
 # ================= INTELIGÊNCIA DE NOMES E ABREVIAÇÕES =================
 
-def abreviar_nome(nome, max_len=12):
+def abreviar_nome(nome, max_len=10):
     """Garante que equipas compridas são abreviadas elegantemente para a tabela do Discord"""
     nome_traduzido = traduzir_nome_equipa(nome)
     if len(nome_traduzido) <= max_len:
@@ -364,7 +367,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
     if msg: await msg.edit(content=None, embed=embed)
     else: await canal_ou_ctx.send(embed=embed)
 
-# ================= COMANDO DE GRUPO (CLASSIFICAÇÃO COMPACTA) =================
+# ================= COMANDO DE GRUPO (CLASSIFICAÇÃO COMPACTA PREMIUM) =================
 
 async def processar_comando_grupo(ctx, letra_grupo):
     letra_grupo = letra_grupo.upper()
@@ -379,16 +382,15 @@ async def processar_comando_grupo(ctx, letra_grupo):
 
         embed = discord.Embed(title=f"🏆 MUNDIAL 2026 — GRUPO {letra_grupo}", color=0x2ecc71)
         
-        # Desenha a tabela com formatação ultrafina (Apenas 30 caracteres, ideal para telemóveis)
-        linhas_tabela = [f"{'Equipa':<12} J  V  E  D  DG Pts"]
-        linhas_tabela.append("-" * 30)
+        # Desenha a tabela com formato premium de alta legibilidade (Fina, limpa e ideal para telemóveis)
+        linhas_tabela = [f" #  {'Equipa':<10} J  V-E-D   DG Pts"]
+        linhas_tabela.append("────────────────────────────────")
         
         rows = tabela_data.get("rows", [])
-        for r in rows:
+        for idx, r in enumerate(rows):
             nome_original = r.get("team", {}).get("name", "N/A")
-            # Abreviar o nome para caber exatamente no limite sem empurrar as colunas
-            nome_f = abreviar_nome(nome_original, 12)
-            nome_f = f"{nome_f:<12}"
+            nome_f = abreviar_nome(nome_original, 10)
+            nome_f = f"{nome_f:<10}"
             
             pts = r.get("points", 0)
             j = r.get("matches", 0)
@@ -399,12 +401,12 @@ async def processar_comando_grupo(ctx, letra_grupo):
             gs = r.get("goalsAgainst", 0)
             dg = gm - gs
             
-            # Mostra a diferença de golos sem o sinal de positivo para poupar espaço precioso
-            dg_str = f"{dg}"
+            # Formatação limpa do saldo de golos (+0, +2, -3)
+            dg_str = f"{dg:+2}" if dg != 0 else " 0"
+            ved_str = f"{v}-{e}-{d}"
             
-            linha = (
-                f"{nome_f}{j:^2}{v:^2}{e:^2}{d:^2}{dg_str:^3}{pts:^3}"
-            )
+            # Linha alinhada de forma perfeita e limpa
+            linha = f" {idx+1}º {nome_f} {j:<1}  {ved_str:<5} {dg_str:>3} {pts:>3}"
             linhas_tabela.append(linha)
             
         tabela_texto = "```\n" + "\n".join(linhas_tabela) + "\n```"
@@ -420,6 +422,7 @@ async def processar_comando_grupo(ctx, letra_grupo):
             nome_jogo = j_g["jogo"]
             partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', nome_jogo)]
             resultado_str = "vs"
+            status_direto = ""
             
             if len(partes) == 2:
                 casa, fora = traduzir_nome_equipa(partes[0]), traduzir_nome_equipa(partes[1])
@@ -433,9 +436,15 @@ async def processar_comando_grupo(ctx, letra_grupo):
                     gf = match_api.get("awayScore", {}).get("current")
                     if gc is not None and gf is not None:
                         resultado_str = f"**{gc}** - **{gf}**"
+                        status_type = match_api.get("status", {}).get("type", "")
+                        status_desc = match_api.get("status", {}).get("description", "")
+                        if status_type == "inprogress":
+                            status_direto = f" 🟢 *({status_desc})*"
+                        elif status_type == "finished":
+                            status_direto = " 🔴 *(Terminado)*"
                         
-            jogo_f = f"**{casa}** {resultado_str} **{fora}**" if len(partes) == 2 else nome_jogo
-            linhas_jogos.append(f"📅 {j_g['data']} | 🕒 {j_g['hora']} — {jogo_f} *(📺 {j_g['canal']})*")
+            jogo_f = f"**{casa}** {resultado_str} **{fora}**{status_direto}" if len(partes) == 2 else nome_jogo
+            linhas_jogos.append(f"📅 {j_g['data']} @ {j_g['hora']} — {jogo_f} *(📺 {j_g['canal']})*")
             
         embed.add_field(name="🥅 Calendário & Resultados", value="\n".join(linhas_jogos), inline=False)
         await ctx.send(embed=embed)
