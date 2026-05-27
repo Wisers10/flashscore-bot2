@@ -192,6 +192,18 @@ def equipas_correspondem(csv_casa, csv_fora, api_casa, api_fora):
     match_fora = bool(palavras_c_fora & palavras_a_fora) or c_fora in a_fora or a_fora in c_fora
     return match_casa and match_fora
 
+def equipa_no_jogo(nome_selecao, jogo_csv):
+    """Verifica se a seleção pesquisada faz parte do confronto estipulado no CSV"""
+    partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', jogo_csv)]
+    if len(partes) != 2:
+        return False
+    
+    s_selecao = simplificar_nome_busca(nome_selecao)
+    s_casa = simplificar_nome_busca(partes[0])
+    s_fora = simplificar_nome_busca(partes[1])
+    
+    return s_selecao in s_casa or s_casa in s_selecao or s_selecao in s_fora or s_fora in s_selecao
+
 # ================= INTEGRAÇÃO COM A API SOFASPORT =================
 
 async def obter_season_id(session):
@@ -367,6 +379,81 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
     if msg: await msg.edit(content=None, embed=embed)
     else: await canal_ou_ctx.send(embed=embed)
 
+# ================= AGENDAS DE SELEÇÕES NACIONAIS (NOVA FUNÇÃO) =================
+
+async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
+    """Filtra e mostra todos os jogos de uma seleção nacional específica com resultados em tempo real"""
+    msg = None
+    if isinstance(canal_ou_ctx, commands.Context):
+        msg = await canal_ou_ctx.send(f"🚀 A procurar calendário para **{nome_selecao}**...")
+        
+    jogos_csv = carregar_mundial_csv()
+    # Filtra os jogos do CSV onde a seleção joga (Casa ou Fora)
+    jogos_filtrados = [j for j in jogos_csv if equipa_no_jogo(nome_selecao, j["jogo"])]
+    
+    if not jogos_filtrados:
+        aviso = f"⚠️ Não encontrei nenhum jogo agendado para a seleção de **{nome_selecao}** no calendário do Mundial."
+        if msg: await msg.edit(content=aviso)
+        else: await canal_ou_ctx.send(aviso)
+        return
+
+    # Determinar a cor estética com base no nome do país pesquisado
+    cor_embed = 0x3498db
+    p_lower = nome_selecao.lower()
+    if "portugal" in p_lower: cor_embed = 0xe74c3c
+    elif "brasil" in p_lower or "brazil" in p_lower: cor_embed = 0xf1c40f
+    elif "espanha" in p_lower or "spain" in p_lower: cor_embed = 0xc0392b
+    elif "franca" in p_lower or "french" in p_lower: cor_embed = 0x2980b9
+
+    embed = discord.Embed(title=f"⚽ Calendário: {nome_selecao.upper()}", color=cor_embed)
+    
+    async with aiohttp.ClientSession() as session:
+        season_id = await obter_season_id(session)
+        eventos_api = await obter_resultados_api(session, season_id)
+        
+        for j_csv in jogos_filtrados:
+            nome_jogo = j_csv["jogo"]
+            hora = j_csv["hora"]
+            canal = j_csv["canal"]
+            data = j_csv["data"]
+            
+            partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', nome_jogo)]
+            resultado_str = "vs"
+            status_direto = ""
+            
+            if len(partes) == 2:
+                casa, fora = traduzir_nome_equipa(partes[0]), traduzir_nome_equipa(partes[1])
+                match_api = None
+                for ev in eventos_api:
+                    api_casa = ev.get("homeTeam", {}).get("name", "")
+                    api_fora = ev.get("awayTeam", {}).get("name", "")
+                    if equipas_correspondem(casa, fora, api_casa, api_fora):
+                        match_api = ev
+                        break
+                
+                if match_api:
+                    gc = match_api.get("homeScore", {}).get("current")
+                    gf = match_api.get("awayScore", {}).get("current")
+                    if gc is not None and gf is not None:
+                        resultado_str = f"**{gc}** - **{gf}**"
+                        status_type = match_api.get("status", {}).get("type", "")
+                        status_desc = match_api.get("status", {}).get("description", "")
+                        if status_type == "inprogress":
+                            status_direto = f" 🟢 *({status_desc})*"
+                        elif status_type == "finished":
+                            status_direto = " 🔴 *(Terminado)*"
+                            
+            nome_jogo_formatado = f"**{casa}** {resultado_str} **{fora}**{status_direto}" if len(partes) == 2 else f"**{nome_jogo}**"
+            
+            embed.add_field(
+                name=f"📅 {data} @ {hora} (Grupo {j_csv['grupo']})",
+                value=f"📺 Canal: **{canal}**\n⚔️ {nome_jogo_formatado}",
+                inline=False
+            )
+            
+    if msg: await msg.edit(content=None, embed=embed)
+    else: await canal_ou_ctx.send(embed=embed)
+
 # ================= COMANDO DE GRUPO (CLASSIFICAÇÃO COMPACTA PREMIUM) =================
 
 async def processar_comando_grupo(ctx, letra_grupo):
@@ -526,12 +613,42 @@ async def grupo(ctx, letra: str):
     """Mostra a tabela e resultados em direto de um grupo (Ex: !grupo A)"""
     await processar_comando_grupo(ctx, letra)
 
+# --- Comandos das Seleções Populares ---
+
+@bot.command()
+async def portugal(ctx):
+    """Mostra todos os jogos de Portugal"""
+    await gerar_agenda_selecao(ctx, "Portugal")
+
+@bot.command()
+async def espanha(ctx):
+    """Mostra todos os jogos de Espanha"""
+    await gerar_agenda_selecao(ctx, "Espanha")
+
+@bot.command(aliases=['frança'])
+async def franca(ctx):
+    """Mostra todos os jogos de França"""
+    await gerar_agenda_selecao(ctx, "França")
+
+@bot.command()
+async def brasil(ctx):
+    """Mostra todos os jogos do Brasil"""
+    await gerar_agenda_selecao(ctx, "Brasil")
+
+@bot.command(aliases=['país', 'pais'])
+async def selecao(ctx, *, nome: str):
+    """Mostra todos os jogos de uma seleção específica (Ex: !selecao Argentina)"""
+    await gerar_agenda_selecao(ctx, nome)
+
+# ----------------------------------------
+
 @bot.command()
 async def comandos(ctx):
     embed = discord.Embed(title="📖 Guia de Comandos — Mundial 2026", color=0x3498db)
     embed.add_field(name="⏰ Agendas Diárias", value="`!hoje`, `!amanha` (Agenda híbrida de canais e resultados em direto)", inline=False)
     embed.add_field(name="📅 Pesquisa de Data", value="`!mundial DD/MM/AAAA` (Ex: `!mundial 11/06/2026`)", inline=False)
     embed.add_field(name="📊 Grupos & Classificações", value="`!grupo A` ou comandos rápidos: `!grupoa` ... `!grupol` (Tabela ultra-compacta para telemóveis)", inline=False)
+    embed.add_field(name="⚽ Seleções Nacionais", value="Comandos diretos: `!portugal`, `!espanha`, `!frança`, `!brasil` ou pesquisa genérica: `!selecao <nome>` (Ex: `!selecao Argentina`)", inline=False)
     await ctx.send(embed=embed)
 
 @bot.event
