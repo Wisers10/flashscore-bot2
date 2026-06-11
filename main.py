@@ -616,7 +616,7 @@ async def processar_comando_grupo(ctx, letra_grupo):
 
 # ================= TAREFA AUTOMÁTICA DIÁRIA =================
 
-@tasks.loop(time=time(hour=8, minute=0, tzinfo=timezone.utc)) # 09:00 Portugal (UTC+1)
+@tasks.loop(time=time(hour=23, minute=0, tzinfo=timezone.utc)) # 00:00 Portugal (UTC+1)
 async def notificacao_diaria():
     print(f"⏰ [AUTOMÁTICO] A enviar agenda diária do Mundial...")
     canal = bot.get_channel(ID_CANAL_NOTIFICACOES)
