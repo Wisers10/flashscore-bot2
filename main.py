@@ -174,7 +174,15 @@ def traduzir_nome_equipa(nome):
         "Croatia": "Croácia",
         "Brazil": "Brasil",
         "USA": "Estados Unidos",
-        "United States": "Estados Unidos"
+        "United States": "Estados Unidos",
+        "Netherlands": "Países Baixos",
+        "Iran": "Irão",
+        "Japan": "Japão",
+        "Poland": "Polónia",
+        "Turkey": "Turquia",
+        "Austria": "Áustria",
+        "Ukraine": "Ucrânia",
+        "Italy": "Itália"
     }
     for k, v in traducoes.items():
         if k.lower() == nome.lower():
@@ -192,7 +200,12 @@ def simplificar_nome_busca(nome):
         "belgica": "belgium", "inglaterra": "england", "suica": "switzerland",
         "suecia": "sweden", "marrocos": "morocco", "camaroes": "cameroon",
         "croacia": "croatia", "brasil": "brazil", "estados unidos": "usa",
-        "united states": "usa", "arabia saudita": "saudi arabia", "africa do sul": "south africa"
+        "united states": "usa", "arabia saudita": "saudi arabia", "africa do sul": "south africa",
+        "bosnia e herzegovina": "bosnia", "bosnia and herzegovina": "bosnia", "bosnia & herzegovina": "bosnia",
+        "bosnia & h.": "bosnia", "bosnia & h": "bosnia", "bosnia and h": "bosnia", "bosnia and h.": "bosnia",
+        "holanda": "netherlands", "paises baixos": "netherlands",
+        "catar": "qatar", "irao": "iran", "japao": "japan", "polonia": "poland",
+        "turquia": "turkey", "austria": "austria", "ucrania": "ukraine", "italia": "italy"
     }
     for k, v in traducoes_busca.items():
         nome = nome.replace(k, v)
@@ -560,7 +573,7 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
         season_id = await obter_season_id(session)
         eventos_api = await obter_resultados_api(session, season_id)
         
-        for j_csv in jogos_filtrados:
+        for j_csv in juegos_filtrados:
             nome_jogo = j_csv["jogo"]
             hora = j_csv["hora"]
             canal = j_csv["canal"]
