@@ -858,8 +858,19 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                 cronologia.append(f"⏱️ **{tempo}** | 🔄 **Substituição** - {equipa_inc}: 🟢 *{player_in}* por 🔴 *{player_out}*")
         
         if cronologia:
-            # Formatar a lista com quebras de linha limpas para o Embed
-            embed.add_field(name="⏱️ Cronologia de Eventos (Em Direto)", value="\n".join(cronologia[:25]), inline=False)
+            # Construir texto respeitando estritamente o limite de 1024 caracteres do Discord Embed Field Value
+            cronologia_texto = ""
+            for item in cronologia:
+                # 15 é uma margem de segurança para o sufixo de quebra e aviso
+                if len(cronologia_texto) + len(item) + 45 > 1024:
+                    cronologia_texto += "\n*... e mais incidentes por apresentar.*"
+                    break
+                if cronologia_texto:
+                    cronologia_texto += "\n" + item
+                else:
+                    cronologia_texto = item
+            
+            embed.add_field(name="⏱️ Cronologia de Eventos (Em Direto)", value=cronologia_texto, inline=False)
         else:
             embed.add_field(name="⏱️ Cronologia de Eventos (Em Direto)", value="🏟️ Sem golos, cartões ou substituições registados até ao momento.", inline=False)
             
