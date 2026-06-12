@@ -581,8 +581,10 @@ async def processar_comando_grupo(ctx, letra_grupo):
             v = r.get("wins", 0)
             e = r.get("draws", 0)
             d = r.get("losses", 0)
-            gm = r.get("goalsFor", 0)
-            gs = r.get("goalsAgainst", 0)
+            
+            # Correção Cirúrgica: Chaves oficiais da SofaSport para golos marcados e sofridos
+            gm = r.get("scoresFor") if r.get("scoresFor") is not None else r.get("goalsFor", 0)
+            gs = r.get("scoresAgainst") if r.get("scoresAgainst") is not None else r.get("goalsAgainst", 0)
             dg = gm - gs
             
             # Formatação limpa do saldo de golos (+0, +2, -3)
