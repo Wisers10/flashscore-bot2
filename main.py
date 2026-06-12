@@ -187,7 +187,10 @@ def simplificar_nome_busca(nome):
         "belgica": "belgium", "inglaterra": "england", "suica": "switzerland",
         "suecia": "sweden", "marrocos": "morocco", "camaroes": "cameroon",
         "croacia": "croatia", "brasil": "brazil", "estados unidos": "usa",
-        "united states": "usa", "arabia saudita": "saudi arabia", "africa do sul": "south africa"
+        "united states": "usa", "arabia saudita": "saudi arabia", "africa do sul": "south africa",
+        "bosnia e herzegovina": "bosnia and herzegovina", "bosnia & herzegovina": "bosnia and herzegovina",
+        "catar": "qatar", "irao": "iran", "japao": "japan", "polonia": "poland", "turquia": "turkey",
+        "austria": "austria", "ucrania": "ukraine", "italia": "italy", "paises baixos": "netherlands"
     }
     for k, v in traducoes_busca.items():
         nome = nome.replace(k, v)
@@ -212,7 +215,7 @@ def equipas_correspondem(csv_casa, csv_fora, api_casa, api_fora):
 
 def equipa_no_jogo(nome_selecao, jogo_csv):
     """Verifica se a seleção pesquisada faz parte do confronto estipulado no CSV"""
-    partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', jogo_csv)]
+    partes = [p.strip() for p in re.split(r'\s*[\s\xa0]+(?:[xX×]|vs\.?|[-–—])[\s\xa0]+\s*', jogo_csv)]
     if len(partes) != 2:
         return False
     
@@ -258,44 +261,54 @@ async def obter_season_id(session):
     return 52561
 
 async def obter_resultados_api(session, season_id):
+    """Procura os eventos em várias páginas em paralelo para certificar cobertura total"""
     agora = time_module.time()
     if "api_events" in cache_jogos:
         if agora - cache_jogos["api_events"]["timestamp"] < CACHE_EXPIRY:
             return cache_jogos["api_events"]["data"]
 
-    url = "https://sofasport.p.rapidapi.com/v1/seasons/events"
-    # Fornece tanto season_id como seasons_id para máxima compatibilidade com a API
-    params = {
-        "seasons_id": str(season_id),
-        "season_id": str(season_id),
-        "unique_tournament_id": "16",
-        "page": "0"
-    }
+    eventos_completos = []
+    # Pedimos as primeiras 6 páginas para garantir que cobrimos todos os jogos do torneio
+    paginas = [0, 1, 2, 3, 4, 5]
     
-    async with api_semaphore:
-        try:
-            async with session.get(url, headers=HEADERS_API, params=params, timeout=15) as r:
-                if r.status == 200:
-                    res = await r.json()
-                    eventos = []
-                    if isinstance(res, dict):
-                        data = res.get("data", {})
-                        if isinstance(data, dict):
-                            eventos = data.get("events", []) or data.get("rows", [])
-                            if not eventos and isinstance(data, list):
-                                eventos = data
-                        elif isinstance(data, list):
-                            eventos = data
-                        if not eventos:
-                            eventos = res.get("events", []) or res.get("data", [])
-                    elif isinstance(res, list):
-                        eventos = res
-                        
-                    cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
-                    return eventos
-        except Exception as e:
-            print(f"⚠️ Erro ao aceder a eventos do Mundial na API: {e}")
-    return []
+    async def buscar_pagina(p):
+        url = "https://sofasport.p.rapidapi.com/v1/seasons/events"
+        params = {
+            "seasons_id": str(season_id),
+            "season_id": str(season_id),
+            "unique_tournament_id": "16",
+            "page": str(p)
+        }
+        async with api_semaphore:
+            try:
+                async with session.get(url, headers=HEADERS_API, params=params, timeout=10) as r:
+                    if r.status == 200:
+                        res = await r.json()
+                        if isinstance(res, dict):
+                            data = res.get("data", {})
+                            if isinstance(data, dict):
+                                evs = data.get("events", []) or data.get("rows", [])
+                                if not evs and isinstance(data, list):
+                                    evs = data
+                                return evs
+                            elif isinstance(data, list):
+                                return data
+                            return res.get("events", []) or res.get("data", [])
+                        elif isinstance(res, list):
+                            return res
+            except Exception as e:
+                print(f"⚠️ Erro ao aceder à página {p} na API: {e}")
+        return []
+
+    tarefas = [buscar_pagina(p) for p in paginas]
+    resultados = await asyncio.gather(*tarefas)
+    
+    for r in resultados:
+        if r:
+            eventos_completos.extend(r)
+            
+    cache_jogos["api_events"] = {"data": eventos_completos, "timestamp": agora}
+    return eventos_completos
 
 async def obter_tabela_api(session, season_id, letra_grupo):
     cache_key = f"standings_{letra_grupo.upper()}"
@@ -387,7 +400,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
             hora = j_csv["hora"]
             canal = j_csv["canal"]
             
-            partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
+            partes = [p.strip() for p in re.split(r'\s*[\s\xa0]+(?:[xX×]|vs\.?|[-–—])[\s\xa0]+\s*', nome_jogo)]
             resultado_str = "vs"
             status_direto = ""
             
@@ -469,7 +482,7 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
             canal = j_csv["canal"]
             data = j_csv["data"]
             
-            partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
+            partes = [p.strip() for p in re.split(r'\s*[\s\xa0]+(?:[xX×]|vs\.?|[-–—])[\s\xa0]+\s*', nome_jogo)]
             resultado_str = "vs"
             status_direto = ""
             
@@ -559,7 +572,7 @@ async def processar_comando_grupo(ctx, letra_grupo):
         linhas_jogos = []
         for j_g in jogos_grupo:
             nome_jogo = j_g["jogo"]
-            partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
+            partes = [p.strip() for p in re.split(r'\s*[\s\xa0]+(?:[xX×]|vs\.?|[-–—])[\s\xa0]+\s*', nome_jogo)]
             resultado_str = "vs"
             status_direto = ""
             
