@@ -260,25 +260,64 @@ async def obter_season_id(session):
     return 52561
 
 async def obter_resultados_api(session, season_id):
+    """Procura os eventos passados e futuros de forma simultânea (Gather), resolvendo o erro 422 ao enviar 'course_events'."""
     agora = time_module.time()
     if "api_events" in cache_jogos:
         if agora - cache_jogos["api_events"]["timestamp"] < CACHE_EXPIRY:
             return cache_jogos["api_events"]["data"]
 
     url = "https://sofasport.p.rapidapi.com/v1/seasons/events"
-    params = {"seasons_id": str(season_id), "unique_tournament_id": "16", "page": "0"}
     
-    async with api_semaphore:
+    async def fetch_events(course):
+        params = {
+            "seasons_id": str(season_id),
+            "unique_tournament_id": "16",
+            "course_events": course,
+            "page": "0"
+        }
         try:
-            async with session.get(url, headers=HEADERS_API, params=params, timeout=15) as r:
+            async with session.get(url, headers=HEADERS_API, params=params, timeout=12) as r:
+                print(f"ℹ️ [SISTEMA] API Seasons Events chamada ({course}). Status: {r.status}")
                 if r.status == 200:
                     res = await r.json()
-                    eventos = res.get("data", {}).get("events", []) or res.get("data", [])
-                    cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
-                    return eventos
+                    return res.get("data", {}).get("events", []) or res.get("data", []) or res.get("events", []) or res
+                else:
+                    # Tentar alternativa sem plural
+                    params_alt = {
+                        "season_id": str(season_id),
+                        "unique_tournament_id": "16",
+                        "course_events": course,
+                        "page": "0"
+                    }
+                    async with session.get(url, headers=HEADERS_API, params=params_alt, timeout=12) as r_alt:
+                        if r_alt.status == 200:
+                            res_alt = await r_alt.json()
+                            return res_alt.get("data", {}).get("events", []) or res_alt.get("data", []) or res_alt.get("events", []) or res_alt
         except Exception as e:
-            print(f"⚠️ Erro ao aceder a eventos do Mundial na API: {e}")
-    return []
+            print(f"⚠️ Erro ao aceder a eventos do tipo '{course}': {e}")
+        return []
+
+    # Fazemos duas chamadas em paralelo para cobrir os jogos terminados ("last") e agendados ("next")
+    eventos_last, eventos_next = await asyncio.gather(
+        fetch_events("last"),
+        fetch_events("next")
+    )
+    
+    eventos_completos = []
+    ids_vistos = set()
+    
+    # Unir e remover potenciais duplicados
+    for ev in (eventos_last + eventos_next):
+        if isinstance(ev, dict):
+            ev_id = ev.get("id")
+            if ev_id and ev_id not in ids_vistos:
+                ids_vistos.add(ev_id)
+                eventos_completos.append(ev)
+            elif not ev_id:
+                eventos_completos.append(ev)
+
+    cache_jogos["api_events"] = {"data": eventos_completos, "timestamp": agora}
+    return eventos_completos
 
 async def obter_tabela_api(session, season_id, letra_grupo):
     cache_key = f"standings_{letra_grupo.upper()}"
@@ -348,6 +387,13 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
         else: await canal_ou_ctx.send(aviso)
         return
 
+    # Ordenar jogos de forma estritamente cronológica por hora de Portugal
+    # Jogos com hora "TBD" (Por definir) são empurrados para o fim da lista
+    jogos_do_dia = sorted(
+        jogos_do_dia, 
+        key=lambda x: x["hora"] if x["hora"] and x["hora"].upper() != "TBD" else "99:99"
+    )
+
     async with aiohttp.ClientSession() as session:
         season_id = await obter_season_id(session)
         eventos_api = await obter_resultados_api(session, season_id)
@@ -377,15 +423,13 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
                     
                     # Formato Premium: Seleção [Golos] vs Seleção [Golos]
                     if gc is not None and gf is not None:
-                        nome_jogo_formatado = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
                         status_type = match_api.get("status", {}).get("type", "")
                         status_desc = match_api.get("status", {}).get("description", "")
                         if status_type == "inprogress":
                             status_direto = f" 🟢 *({status_desc})*"
-                            nome_jogo_formatado += status_direto
                         elif status_type == "finished":
                             status_direto = " 🔴 *(Terminado)*"
-                            nome_jogo_formatado += status_direto
+                        nome_jogo_formatado = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
                     else:
                         nome_jogo_formatado = f"**{casa}** vs **{fora}**"
                 else:
@@ -429,6 +473,21 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
         else: await canal_ou_ctx.send(aviso)
         return
 
+    # Ordenar os jogos cronologicamente por data e hora
+    def parse_datetime(j):
+        try:
+            dia, mes, ano = map(int, j["data"].split('/'))
+            hora_str = j["hora"]
+            if not hora_str or hora_str.upper() == "TBD":
+                hora_h, hora_m = 23, 59
+            else:
+                hora_h, hora_m = map(int, hora_str.split(':'))
+            return datetime(ano, mes, dia, hora_h, hora_m)
+        except:
+            return datetime(9999, 12, 31, 23, 59)
+
+    jogos_filtrados = sorted(jogos_filtrados, key=parse_datetime)
+
     # Determinar a cor estética com base no nome do país pesquisado
     cor_embed = 0x3498db
     p_lower = nome_selecao.lower()
@@ -466,15 +525,13 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
                     gc = match_api.get("homeScore", {}).get("current")
                     gf = match_api.get("awayScore", {}).get("current")
                     if gc is not None and gf is not None:
-                        nome_jogo_formatado = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
                         status_type = match_api.get("status", {}).get("type", "")
                         status_desc = match_api.get("status", {}).get("description", "")
                         if status_type == "inprogress":
                             status_direto = f" 🟢 *({status_desc})*"
-                            nome_jogo_formatado += status_direto
                         elif status_type == "finished":
                             status_direto = " 🔴 *(Terminado)*"
-                            nome_jogo_formatado += status_direto
+                        nome_jogo_formatado = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
                     else:
                         nome_jogo_formatado = f"**{casa}** vs **{fora}**"
                 else:
@@ -541,6 +598,21 @@ async def processar_comando_grupo(ctx, letra_grupo):
         jogos_csv = carregar_mundial_csv()
         jogos_grupo = [jg for jg in jogos_csv if jg["grupo"] == letra_grupo]
         
+        # Ordenar os jogos do grupo cronologicamente
+        def parse_datetime(j):
+            try:
+                dia, mes, ano = map(int, j["data"].split('/'))
+                hora_str = j["hora"]
+                if not hora_str or hora_str.upper() == "TBD":
+                    hora_h, hora_m = 23, 59
+                else:
+                    hora_h, hora_m = map(int, hora_str.split(':'))
+                return datetime(ano, mes, dia, hora_h, hora_m)
+            except:
+                return datetime(9999, 12, 31, 23, 59)
+
+        jogos_grupo = sorted(jogos_grupo, key=parse_datetime)
+
         linhas_jogos = []
         for j_g in jogos_grupo:
             nome_jogo = j_g["jogo"]
@@ -558,15 +630,13 @@ async def processar_comando_grupo(ctx, letra_grupo):
                     gc = match_api.get("homeScore", {}).get("current")
                     gf = match_api.get("awayScore", {}).get("current")
                     if gc is not None and gf is not None:
-                        jogo_f = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
                         status_type = match_api.get("status", {}).get("type", "")
                         status_desc = match_api.get("status", {}).get("description", "")
                         if status_type == "inprogress":
                             status_direto = f" 🟢 *({status_desc})*"
-                            jogo_f += status_direto
                         elif status_type == "finished":
                             status_direto = " 🔴 *(Terminado)*"
-                            jogo_f += status_direto
+                        jogo_f = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
                     else:
                         jogo_f = f"**{casa}** vs **{fora}**"
                 else:
