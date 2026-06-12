@@ -322,6 +322,44 @@ async def obter_resultados_api(session, season_id):
     cache_jogos["api_events"] = {"data": eventos_completos, "timestamp": agora}
     return eventos_completos
 
+async def obter_incidentes_api(session, event_id):
+    """Descarrega os incidentes e a cronologia do jogo (Golos, Cartões e Substituições) da API em tempo real."""
+    cache_key = f"incidents_{event_id}"
+    agora = time_module.time()
+    if cache_key in cache_jogos:
+        if agora - cache_jogos[cache_key]["timestamp"] < 60: # Cache rápido de 60 segundos para eventos ao vivo
+            return cache_jogos[cache_key]["data"]
+
+    url = "https://sofasport.p.rapidapi.com/v1/events/incidents"
+    params = {
+        "event_id": str(event_id),
+        "events_id": str(event_id) # Salvaguarda de parâmetros
+    }
+    
+    async with api_semaphore:
+        try:
+            async with session.get(url, headers=HEADERS_API, params=params, timeout=12) as r:
+                print(f"ℹ️ [SISTEMA] API Event Incidents chamada. Status: {r.status}")
+                if r.status == 200:
+                    res = await r.json()
+                    incidents = []
+                    if isinstance(res, list):
+                        incidents = res
+                    elif isinstance(res, dict):
+                        incidents = res.get("data", {}).get("incidents", []) or res.get("incidents", []) or res.get("data", [])
+                    
+                    # Garantir que estão ordenados de forma ascendente por tempo
+                    try:
+                        incidents = sorted(incidents, key=lambda x: x.get("time", 0))
+                    except:
+                        pass
+                        
+                    cache_jogos[cache_key] = {"data": incidents, "timestamp": agora}
+                    return incidents
+        except Exception as e:
+            print(f"⚠️ Erro ao aceder a incidentes do jogo {event_id}: {e}")
+    return []
+
 async def obter_tabela_api(session, season_id, letra_grupo):
     cache_key = f"standings_{letra_grupo.upper()}"
     agora = time_module.time()
@@ -654,6 +692,128 @@ async def processar_comando_grupo(ctx, letra_grupo):
         embed.add_field(name="🥅 Calendário & Resultados", value="\n".join(linhas_jogos), inline=False)
         await ctx.send(embed=embed)
 
+# ================= COMANDO DE DETALHES DE JOGO EM DIRETO (INCIDENTES) =================
+
+@bot.command(aliases=['jogo', 'info', 'eventos'])
+async def detalhes(ctx, *, equipas_pesquisa: str):
+    """Mostra os incidentes detalhados de um jogo (Golos, Marcadores, Substituições e Cartões) em direto."""
+    await ctx.send("🔍 A descarregar detalhes e incidentes da partida na API...")
+    
+    # Separar os argumentos de pesquisa (ex: "mexico x africa" ou apenas "portugal")
+    partes = [p.strip() for p in re.split(r'\s+(?:[xX×]|vs\.?|[-–—]|e)\s+', equipas_pesquisa)]
+    
+    jogos_csv = carregar_mundial_csv()
+    match_csv = None
+    
+    if len(partes) == 2:
+        # Pesquisa por confronto direto entre dois países
+        for j in jogos_csv:
+            if equipa_no_jogo(partes[0], j["jogo"]) and equipa_no_jogo(partes[1], j["jogo"]):
+                match_csv = j
+                break
+    elif len(partes) == 1:
+        # Pesquisa genérica pelo último jogo registado do país
+        for j in jogos_csv:
+            if equipa_no_jogo(partes[0], j["jogo"]):
+                match_csv = j
+                break
+                
+    if not match_csv:
+        return await ctx.send("❌ Não encontrei nenhuma partida agendada para essa pesquisa no calendário do Mundial.")
+        
+    nome_jogo = match_csv["jogo"]
+    partes_jogo = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
+    if len(partes_jogo) != 2:
+        return await ctx.send("❌ Formato de jogo inválido no calendário local.")
+        
+    casa, fora = traduzir_nome_equipa(partes_jogo[0]), traduzir_nome_equipa(partes_jogo[1])
+    
+    async with aiohttp.ClientSession() as session:
+        season_id = await obter_season_id(session)
+        eventos_api = await obter_resultados_api(session, season_id)
+        
+        match_api = None
+        for ev in eventos_api:
+            api_casa = ev.get("homeTeam", {}).get("name", "")
+            api_fora = ev.get("awayTeam", {}).get("name", "")
+            if equipas_correspondem(casa, fora, api_casa, api_fora):
+                match_api = ev
+                break
+                
+        if not match_api:
+            return await ctx.send(f"⚠️ Encontrei o jogo **{casa} vs {fora}** no calendário local, mas ainda não está sincronizado com o servidor SofaSport.")
+            
+        event_id = match_api.get("id")
+        if not event_id:
+            return await ctx.send("❌ Erro ao obter o identificador da partida em direto.")
+            
+        incidents = await obter_incidentes_api(session, event_id)
+        
+        gc = match_api.get("homeScore", {}).get("current")
+        gf = match_api.get("awayScore", {}).get("current")
+        resultado_f = f"**[{gc}]** vs **[{gf}]**" if gc is not None and gf is not None else "vs"
+        
+        status_desc = match_api.get("status", {}).get("description", "Agendado")
+        
+        embed = discord.Embed(
+            title=f"⚽ Detalhes do Confronto: {casa} {resultado_f} {fora}",
+            description=f"🏟️ Estado: **{status_desc}** | 📺 Transmissão: **{match_csv['canal']}**",
+            color=0x2ecc71
+        )
+        
+        cronologia = []
+        for inc in incidents:
+            inc_type = inc.get("incidentType", "").lower()
+            tempo = f"{inc.get('time', 0)}'"
+            if inc.get("addedTime"):
+                tempo = f"{inc.get('time', 0)}+{inc.get('addedTime')}'"
+                
+            is_home = inc.get("isHome", True)
+            equipa_inc = casa if is_home else fora
+            
+            player_name = inc.get("player", {}).get("name", "Jogador")
+            
+            if inc_type == "goal":
+                inc_class = inc.get("incidentClass", "").lower()
+                emoji = "⚽"
+                detalhe = "GOLO!"
+                if inc_class == "penalty":
+                    emoji = "🥅"
+                    detalhe = "GOLO (Penálti)!"
+                elif inc_class == "owngoal":
+                    emoji = "❌"
+                    detalhe = "Auto-Golo!"
+                    
+                assist_name = inc.get("assist", {}).get("name")
+                assist_str = f" *(Assist. {assist_name})*" if assist_name else ""
+                cronologia.append(f"⏱️ **{tempo}** | {emoji} **{detalhe}** - {equipa_inc}: *{player_name}*{assist_str}")
+                
+            elif inc_type == "card":
+                inc_class = inc.get("incidentClass", "").lower()
+                if "yellowred" in inc_class or "yellow-red" in inc_class:
+                    emoji = "🟨🟥"
+                    detalhe = "Duplo Amarelo / Vermelho!"
+                elif "red" in inc_class:
+                    emoji = "🟥"
+                    detalhe = "Cartão Vermelho!"
+                else:
+                    emoji = "🟨"
+                    detalhe = "Cartão Amarelo"
+                cronologia.append(f"⏱️ **{tempo}** | {emoji} **{detalhe}** - {equipa_inc}: *{player_name}*")
+                
+            elif inc_type == "substitution":
+                player_in = inc.get("playerIn", {}).get("name", "Entra")
+                player_out = inc.get("playerOut", {}).get("name", "Sai")
+                cronologia.append(f"⏱️ **{tempo}** | 🔄 **Substituição** - {equipa_inc}: 🟢 *{player_in}* por 🔴 *{player_out}*")
+        
+        if cronologia:
+            # Formatar a lista com quebras de linha limpas para o Embed
+            embed.add_field(name="⏱️ Cronologia de Eventos (Em Direto)", value="\n".join(cronologia[:25]), inline=False)
+        else:
+            embed.add_field(name="⏱️ Cronologia de Eventos (Em Direto)", value="🏟️ Sem golos, cartões ou substituições registados até ao momento.", inline=False)
+            
+        await ctx.send(embed=embed)
+
 # ================= TAREFA AUTOMÁTICA DIÁRIA (MEIA NOITE PORTUGAL) =================
 
 @tasks.loop(time=time(hour=23, minute=0, tzinfo=timezone.utc)) # 23:00 UTC = 00:00 (Meia-Noite) em Portugal (UTC+1)
@@ -763,6 +923,7 @@ async def comandos(ctx):
     embed.add_field(name="⏰ Agendas Diárias", value="`!hoje`, `!amanha` (Agenda híbrida de canais e resultados em direto)", inline=False)
     embed.add_field(name="📅 Pesquisa de Data", value="`!mundial DD/MM/AAAA` (Ex: `!mundial 11/06/2026`)", inline=False)
     embed.add_field(name="📊 Grupos & Classificações", value="`!grupo A` ou comandos rápidos: `!grupoa` ... `!grupol` (Tabela ultra-compacta para telemóveis)", inline=False)
+    embed.add_field(name="⚽ Detalhes do Jogo (Cronologia)", value="`!detalhes <seleção1> <seleção2>` ou `!detalhes <seleção>` (Ex: `!detalhes portugal` ou `!detalhes mexico x africa`)", inline=False)
     embed.add_field(name="⚽ Seleções Nacionais", value="Comandos diretos para TODAS as seleções do Mundial (Ex: `!portugal`, `!brasil`, `!argentina`, `!alemanha`, `!marrocos`, etc.) ou pesquisa genérica: `!selecao <nome>`", inline=False)
     await ctx.send(embed=embed)
 
