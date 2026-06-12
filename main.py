@@ -20,7 +20,7 @@ ID_CANAL_VOZ_STR = os.getenv('ID_CANAL_VOZ', '813485447719813207')
 # Fuso horário de Portugal (Ajuste manual de +1h sobre o UTC)
 OFFSET_PT = timedelta(hours=1)
 
-CACHE_EXPIRY = 300 # Cache rápido de 5 minutos para os resultados em direto da API
+CACHE_EXPIRY = 300 # Cache rápido de 5 minutes para os resultados em direto da API
 cache_jogos = {}
 
 # Dados de salvaguarda (Caso o mundial.csv ainda não esteja na pasta)
@@ -201,19 +201,22 @@ def simplificar_nome_busca(nome):
     return nome.strip()
 
 def equipas_correspondem(csv_casa, csv_fora, api_casa, api_fora):
+    """Compara as equipas com correspondência estrita para evitar emparelhamentos falsos por palavras comuns (ex: 'Sul')"""
     c_casa = simplificar_nome_busca(csv_casa)
     c_fora = simplificar_nome_busca(csv_fora)
     a_casa = simplificar_nome_busca(api_casa)
     a_fora = simplificar_nome_busca(api_fora)
     
-    palavras_c_casa = set(c_casa.split())
-    palavras_c_fora = set(c_fora.split())
-    palavras_a_casa = set(a_casa.split())
-    palavras_a_fora = set(a_fora.split())
-    
-    match_casa = bool(palavras_c_casa & palavras_a_casa) or c_casa in a_casa or a_casa in c_casa
-    match_fora = bool(palavras_c_fora & palavras_a_fora) or c_fora in a_fora or a_fora in c_fora
-    return match_casa and match_fora
+    # Validação estrita por igualdade de nomes ou se um nome está totalmente contido no outro
+    match_direto_casa = (c_casa == a_casa) or (c_casa in a_casa) or (a_casa in c_casa)
+    match_direto_fora = (c_fora == a_fora) or (c_fora in a_fora) or (a_fora in c_fora)
+    if match_direto_casa and match_direto_fora:
+        return True
+        
+    # Verificação adicional invertida (para o caso de a API inverter a ordem de casa/fora)
+    match_inv_casa = (c_casa == a_fora) or (c_casa in a_fora) or (a_fora in c_casa)
+    match_inv_fora = (c_fora == a_casa) or (c_fora in a_casa) or (a_casa in c_fora)
+    return match_inv_casa and match_inv_fora
 
 def equipa_no_jogo(nome_selecao, jogo_csv):
     """Verifica se a seleção pesquisada faz parte do confronto estipulado no CSV com regex de espaçamento estrito"""
