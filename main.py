@@ -711,9 +711,15 @@ async def processar_comando_grupo(ctx, letra_grupo):
 
 # ================= COMANDO DE DETALHES DE JOGO EM DIRETO (INCIDENTES) =================
 
+def obter_codigo_selecao(nome):
+    """Gera um código de 3 letras estrito e limpo sem acentos com base no nome do país."""
+    nome_clean = ''.join(c for c in unicodedata.normalize('NFD', nome) if unicodedata.category(c) != 'Mn')
+    nome_clean = re.sub(r'[^a-zA-Z]', '', nome_clean)
+    return nome_clean[:3].upper()
+
 @bot.command(aliases=['jogo', 'info', 'eventos'])
 async def detalhes(ctx, *, equipas_pesquisa: str):
-    """Mostra os incidentes detalhados de um jogo (Golos, Marcadores, Substituições e Cartões) em direto."""
+    """Mostra os incidentes detalhados de um jogo dividido por 1ª e 2ª parte em direto (com códigos de seleção)."""
     await ctx.send("🔍 A descarregar detalhes e incidentes da partida na API...")
     
     # Separar os argumentos de pesquisa (ex: "mexico x africa" ou apenas "portugal")
@@ -778,13 +784,21 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
             color=0x2ecc71
         )
         
-        cronologia = []
+        # Estruturas para as partes do jogo (Cronologia Dividida)
+        parte_1 = []
+        parte_2 = []
+        prolongamento = []
+        
+        cod_casa = obter_codigo_selecao(casa)
+        cod_fora = obter_codigo_selecao(fora)
+        
         for inc in incidents:
             # Varredura inteligente de chaves (incidentType vs type)
             inc_type = (inc.get("incidentType") or inc.get("type") or "").lower()
-            tempo = f"{inc.get('time', 0)}'"
+            time_val = inc.get('time', 0)
+            tempo = f"{time_val}'"
             if inc.get("addedTime"):
-                tempo = f"{inc.get('time', 0)}+{inc.get('addedTime')}'"
+                tempo = f"{time_val}+{inc.get('addedTime')}'"
                 
             # Identificação estrita da equipa (isHome / home / isHomeTeam)
             is_home = inc.get("isHome")
@@ -793,7 +807,8 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
             if is_home is None:
                 is_home = True
                 
-            equipa_inc = casa if is_home else fora
+            cod_equipa = cod_casa if is_home else cod_fora
+            emoji_equipa = "🟢" if is_home else "🔵"
             
             # Parsing robusto do jogador envolvido
             p_obj = inc.get("player")
@@ -804,16 +819,18 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
             else:
                 player_name = "Jogador"
             
+            evento_linha = ""
+            
             if inc_type == "goal":
                 inc_class = (inc.get("incidentClass") or inc.get("class") or "").lower()
                 emoji = "⚽"
-                detalhe = "GOLO!"
+                detalhe = "GOLO"
                 if inc_class == "penalty":
                     emoji = "🥅"
-                    detalhe = "GOLO (Penálti)!"
+                    detalhe = "GOLO (p)"
                 elif inc_class == "owngoal":
                     emoji = "❌"
-                    detalhe = "Auto-Golo!"
+                    detalhe = "Auto-Golo"
                     
                 # Parsing robusto do jogador da assistência
                 assist_obj = inc.get("assist")
@@ -823,21 +840,21 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                 elif isinstance(assist_obj, str):
                     assist_name = assist_obj
                     
-                assist_str = f" *(Assist. {assist_name})*" if assist_name else ""
-                cronologia.append(f"⏱️ **{tempo}** | {emoji} **{detalhe}** - {equipa_inc}: *{player_name}*{assist_str}")
+                assist_str = f" *(p/ {assist_name})*" if assist_name else ""
+                evento_linha = f"{emoji_equipa} **[{cod_equipa}]** `{tempo:<5}` {emoji} **{detalhe}!** — *{player_name}*{assist_str}"
                 
             elif inc_type == "card":
                 inc_class = (inc.get("incidentClass") or inc.get("class") or "").lower()
                 if "yellowred" in inc_class or "yellow-red" in inc_class:
                     emoji = "🟨🟥"
-                    detalhe = "Duplo Amarelo / Vermelho!"
+                    detalhe = "Duplo Amarelo"
                 elif "red" in inc_class:
                     emoji = "🟥"
-                    detalhe = "Cartão Vermelho!"
+                    detalhe = "Vermelho!"
                 else:
                     emoji = "🟨"
-                    detalhe = "Cartão Amarelo"
-                cronologia.append(f"⏱️ **{tempo}** | {emoji} **{detalhe}** - {equipa_inc}: *{player_name}*")
+                    detalhe = "Amarelo"
+                evento_linha = f"{emoji_equipa} **[{cod_equipa}]** `{tempo:<5}` {emoji} **{detalhe}** — *{player_name}*"
                 
             elif inc_type == "substitution":
                 p_in_obj = inc.get("playerIn")
@@ -855,24 +872,37 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                 elif isinstance(p_out_obj, str):
                     player_out = p_out_obj
                     
-                cronologia.append(f"⏱️ **{tempo}** | 🔄 **Substituição** - {equipa_inc}: 🟢 *{player_in}* por 🔴 *{player_out}*")
-        
-        if cronologia:
-            # Construir texto respeitando estritamente o limite de 1024 caracteres do Discord Embed Field Value
-            cronologia_texto = ""
-            for item in cronologia:
-                # 15 é uma margem de segurança para o sufixo de quebra e aviso
-                if len(cronologia_texto) + len(item) + 45 > 1024:
-                    cronologia_texto += "\n*... e mais incidentes por apresentar.*"
-                    break
-                if cronologia_texto:
-                    cronologia_texto += "\n" + item
-                else:
-                    cronologia_texto = item
+                evento_linha = f"{emoji_equipa} **[{cod_equipa}]** `{tempo:<5}` 🔄 *{player_out}* ➡️ *{player_in}*"
             
-            embed.add_field(name="⏱️ Cronologia de Eventos (Em Direto)", value=cronologia_texto, inline=False)
-        else:
-            embed.add_field(name="⏱️ Cronologia de Eventos (Em Direto)", value="🏟️ Sem golos, cartões ou substituições registados até ao momento.", inline=False)
+            # Distribuir os eventos pelas respetivas metades cronológicas
+            if evento_linha:
+                if time_val <= 45:
+                    parte_1.append(evento_linha)
+                elif 45 < time_val <= 90:
+                    parte_2.append(evento_linha)
+                else:
+                    prolongamento.append(evento_linha)
+        
+        # Função auxiliar estrita de formatação de limite seguro de 1024 caracteres
+        def formatar_parte(lista_eventos):
+            if not lista_eventos:
+                return "🏟️ *Sem incidentes registados nesta parte.*"
+            texto = ""
+            for item in lista_eventos:
+                if len(texto) + len(item) + 45 > 1024:
+                    texto += "\n*... e mais incidentes.*"
+                    break
+                if texto:
+                    texto += "\n" + item
+                else:
+                    texto = item
+            return texto
+            
+        # Adicionar as metades separadas cronologicamente ao Embed
+        embed.add_field(name="⏱️ 1ª PARTE", value=formatar_parte(parte_1), inline=False)
+        embed.add_field(name="⏱️ 2ª PARTE", value=formatar_parte(parte_2), inline=False)
+        if prolongamento:
+            embed.add_field(name="⏱️ PROLONGAMENTO / PÉNALTIS", value=formatar_parte(prolongamento), inline=False)
             
         await ctx.send(embed=embed)
 
