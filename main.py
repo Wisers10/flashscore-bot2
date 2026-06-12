@@ -260,16 +260,16 @@ async def obter_season_id(session):
             print(f"⚠️ Erro ao procurar season_id na API: {e}")
     return 52561
 
-async def obter_resultados_api(session, season_id):
-    """Procura os eventos da época. Otimizado para fazer apenas 1 chamada limpa, conservando a cota de RapidAPI"""
+async def obter_resultados_api(session):
+    """Procura os eventos do torneio. Corrigido parâmetros para evitar o Erro 422 da API."""
     agora = time_module.time()
     if "api_events" in cache_jogos:
         if agora - cache_jogos["api_events"]["timestamp"] < CACHE_EXPIRY:
             return cache_jogos["api_events"]["data"]
 
-    url = "https://sofasport.p.rapidapi.com/v1/seasons/events"
+    url = "https://sofasport.p.rapidapi.com/v1/unique-tournaments/events"
+    # Parâmetros estritos exigidos por esta rota da API SofaSport
     params = {
-        "season_id": str(season_id),
         "unique_tournament_id": "16",
         "page": "0"
     }
@@ -277,7 +277,7 @@ async def obter_resultados_api(session, season_id):
     async with api_semaphore:
         try:
             async with session.get(url, headers=HEADERS_API, params=params, timeout=12) as r:
-                print(f"ℹ️ [SISTEMA] API Seasons Events chamada. Status: {r.status}")
+                print(f"ℹ️ [SISTEMA] API Unique Tournaments Events chamada. Status: {r.status}")
                 if r.status == 200:
                     res = await r.json()
                     eventos = []
@@ -295,13 +295,13 @@ async def obter_resultados_api(session, season_id):
                         else:
                             eventos = res.get("rows", []) or res.get("data", [])
                     
-                    print(f"✅ [SISTEMA] API retornou com sucesso {len(eventos)} jogos do Mundial.")
+                    print(f"✅ [SISTEMA] API retornou {len(eventos)} eventos com sucesso.")
                     cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
                     return eventos
                 else:
                     print(f"⚠️ [SISTEMA] Erro na API de eventos: Código {r.status}")
         except Exception as e:
-            print(f"❌ [SISTEMA] Exceção crítica ao aceder à API de eventos: {e}")
+            print(f"❌ [SISTEMA] Falha ao aceder à API de eventos: {e}")
     return []
 
 async def obter_tabela_api(session, season_id, letra_grupo):
@@ -385,8 +385,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
         return
 
     async with aiohttp.ClientSession() as session:
-        season_id = await obter_season_id(session)
-        eventos_api = await obter_resultados_api(session, season_id)
+        eventos_api = await obter_resultados_api(session)
         
         for j_csv in jogos_do_dia:
             encontrou = True
@@ -404,25 +403,24 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
                 for ev in eventos_api:
                     api_casa = ev.get("homeTeam", {}).get("name") or ev.get("homeTeam", {}).get("shortName") or ""
                     api_fora = ev.get("awayTeam", {}).get("name") or ev.get("awayTeam", {}).get("shortName") or ""
-                    if equipas_correspondem(casa, fora, api_casa, api_fora):
-                        match_api = ev
-                        break
+                    
+                    # Filtra apenas por jogos de 2026 para evitar colisões com torneios anteriores
+                    ts = ev.get("startTimestamp")
+                    if ts and datetime.fromtimestamp(ts, tz=timezone.utc).year == 2026:
+                        if equipas_correspondem(casa, fora, api_casa, api_fora):
+                            match_api = ev
+                            break
                 
                 if match_api:
                     gc_val = match_api.get("homeScore")
                     gf_val = match_api.get("awayScore")
                     
-                    gc = None
-                    gf = None
-                    if isinstance(gc_val, dict):
-                        gc = gc_val.get("current") or gc_val.get("display")
-                    elif isinstance(gc_val, (int, str)):
-                        gc = gc_val
+                    gc, gf = None, None
+                    if isinstance(gc_val, dict): gc = gc_val.get("current") or gc_val.get("display")
+                    elif isinstance(gc_val, (int, str)): gc = gc_val
                         
-                    if isinstance(gf_val, dict):
-                        gf = gf_val.get("current") or gf_val.get("display")
-                    elif isinstance(gf_val, (int, str)):
-                        gf = gf_val
+                    if isinstance(gf_val, dict): gf = gf_val.get("current") or gf_val.get("display")
+                    elif isinstance(gf_val, (int, str)): gf = gf_val
 
                     if gc is not None and gf is not None:
                         resultado_str = f"**{gc}** - **{gf}**"
@@ -480,8 +478,7 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
     embed = discord.Embed(title=f"⚽ Calendário: {nome_selecao.upper()}", color=cor_embed)
     
     async with aiohttp.ClientSession() as session:
-        season_id = await obter_season_id(session)
-        eventos_api = await obter_resultados_api(session, season_id)
+        eventos_api = await obter_resultados_api(session)
         
         for j_csv in jogos_filtrados:
             nome_jogo = j_csv["jogo"]
@@ -499,25 +496,23 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
                 for ev in eventos_api:
                     api_casa = ev.get("homeTeam", {}).get("name") or ev.get("homeTeam", {}).get("shortName") or ""
                     api_fora = ev.get("awayTeam", {}).get("name") or ev.get("awayTeam", {}).get("shortName") or ""
-                    if equipas_correspondem(casa, fora, api_casa, api_fora):
-                        match_api = ev
-                        break
+                    
+                    ts = ev.get("startTimestamp")
+                    if ts and datetime.fromtimestamp(ts, tz=timezone.utc).year == 2026:
+                        if equipas_correspondem(casa, fora, api_casa, api_fora):
+                            match_api = ev
+                            break
                 
                 if match_api:
                     gc_val = match_api.get("homeScore")
                     gf_val = match_api.get("awayScore")
                     
-                    gc = None
-                    gf = None
-                    if isinstance(gc_val, dict):
-                        gc = gc_val.get("current") or gc_val.get("display")
-                    elif isinstance(gc_val, (int, str)):
-                        gc = gc_val
+                    gc, gf = None, None
+                    if isinstance(gc_val, dict): gc = gc_val.get("current") or gc_val.get("display")
+                    elif isinstance(gc_val, (int, str)): gc = gc_val
                         
-                    if isinstance(gf_val, dict):
-                        gf = gf_val.get("current") or gf_val.get("display")
-                    elif isinstance(gf_val, (int, str)):
-                        gf = gf_val
+                    if isinstance(gf_val, dict): gf = gf_val.get("current") or gf_val.get("display")
+                    elif isinstance(gf_val, (int, str)): gf = gf_val
 
                     if gc is not None and gf is not None:
                         resultado_str = f"**{gc}** - **{gf}**"
@@ -585,7 +580,7 @@ async def processar_comando_grupo(ctx, letra_grupo):
         embed.add_field(name="📊 Tabela Classificativa (Em Direto)", value=tabela_texto, inline=False)
         
         # Mostra o calendário e canais do Excel corrigidos
-        eventos_api = await obter_resultados_api(session, season_id)
+        eventos_api = await obter_resultados_api(session)
         jogos_csv = carregar_mundial_csv()
         jogos_grupo = [jg for jg in jogos_csv if jg["grupo"] == letra_grupo]
         
@@ -602,24 +597,22 @@ async def processar_comando_grupo(ctx, letra_grupo):
                 for ev in eventos_api:
                     api_casa = ev.get("homeTeam", {}).get("name") or ev.get("homeTeam", {}).get("shortName") or ""
                     api_fora = ev.get("awayTeam", {}).get("name") or ev.get("awayTeam", {}).get("shortName") or ""
-                    if equipas_correspondem(casa, fora, api_casa, api_fora):
-                        match_api = ev
-                        break
+                    
+                    ts = ev.get("startTimestamp")
+                    if ts and datetime.fromtimestamp(ts, tz=timezone.utc).year == 2026:
+                        if equipas_correspondem(casa, fora, api_casa, api_fora):
+                            match_api = ev
+                            break
                 if match_api:
                     gc_val = match_api.get("homeScore")
                     gf_val = match_api.get("awayScore")
                     
-                    gc = None
-                    gf = None
-                    if isinstance(gc_val, dict):
-                        gc = gc_val.get("current") or gc_val.get("display")
-                    elif isinstance(gc_val, (int, str)):
-                        gc = gc_val
+                    gc, gf = None, None
+                    if isinstance(gc_val, dict): gc = gc_val.get("current") or gc_val.get("display")
+                    elif isinstance(gc_val, (int, str)): gc = gc_val
                         
-                    if isinstance(gf_val, dict):
-                        gf = gf_val.get("current") or gf_val.get("display")
-                    elif isinstance(gf_val, (int, str)):
-                        gf = gf_val
+                    if isinstance(gf_val, dict): gf = gf_val.get("current") or gf_val.get("display")
+                    elif isinstance(gf_val, (int, str)): gf = gf_val
 
                     if gc is not None and gf is not None:
                         resultado_str = f"**{gc}** - **{gf}**"
