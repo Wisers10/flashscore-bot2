@@ -266,7 +266,9 @@ async def obter_season_id(session):
     return 52561
 
 async def obter_resultados_api(session, season_id):
-    """Procura os eventos da época de forma estável, passando todos os parâmetros obrigatórios."""
+    """Procura os eventos da época de forma 100% resiliente e auto-corretiva.
+    Experimenta sequencialmente as 14 combinações de parâmetros até obter Status 200 OK.
+    """
     agora = time_module.time()
     if "api_events" in cache_jogos:
         if agora - cache_jogos["api_events"]["timestamp"] < CACHE_EXPIRY:
@@ -274,73 +276,71 @@ async def obter_resultados_api(session, season_id):
 
     url = "https://sofasport.p.rapidapi.com/v1/seasons/events"
     
-    # 1ª Tentativa: "seasons_id" (padrão oficial que requer unique_tournament_id)
-    params = {
-        "seasons_id": str(season_id),
-        "unique_tournament_id": "16",
-        "page": "0"
-    }
+    # Lista exaustiva de tentativas com todas as variações de parâmetros possíveis na SofaSport
+    tentativas = [
+        # 1. Plural snake_case com torneio e página (A mais provável de funcionar)
+        {"seasons_id": str(season_id), "unique_tournament_id": "16", "page": "0"},
+        # 2. Singular snake_case com torneio e página
+        {"season_id": str(season_id), "unique_tournament_id": "16", "page": "0"},
+        # 3. Plural snake_case simples sem página
+        {"seasons_id": str(season_id), "unique_tournament_id": "16"},
+        # 4. Singular snake_case simples sem página
+        {"season_id": str(season_id), "unique_tournament_id": "16"},
+        # 5. Plural camelCase com torneio e página
+        {"seasonsId": str(season_id), "uniqueTournamentId": "16", "page": "0"},
+        # 6. Singular camelCase com torneio e página
+        {"seasonId": str(season_id), "uniqueTournamentId": "16", "page": "0"},
+        # 7. Plural snake_case isolado (Muitos hosts de API ignoram o ID do torneio nesta rota)
+        {"seasons_id": str(season_id), "page": "0"},
+        # 8. Singular snake_case isolado
+        {"season_id": str(season_id), "page": "0"},
+        # 9. Plural snake_case absoluto
+        {"seasons_id": str(season_id)},
+        # 10. Singular snake_case absoluto
+        {"season_id": str(season_id)},
+        # 11. Plural camelCase isolado
+        {"seasonsId": str(season_id), "page": "0"},
+        # 12. Singular camelCase isolado
+        {"seasonId": str(season_id), "page": "0"},
+        # 13. Plural camelCase absoluto
+        {"seasonsId": str(season_id)},
+        # 14. Singular camelCase absoluto
+        {"seasonId": str(season_id)}
+    ]
     
     async with api_semaphore:
-        try:
-            async with session.get(url, headers=HEADERS_API, params=params, timeout=12) as r:
-                print(f"ℹ️ [SISTEMA] API Seasons Events chamada (seasons_id). Status: {r.status}")
-                if r.status == 200:
-                    res = await r.json()
-                    eventos = []
-                    if isinstance(res, list):
-                        eventos = res
-                    elif isinstance(res, dict):
-                        if "events" in res and isinstance(res["events"], list):
-                            eventos = res["events"]
-                        elif "data" in res:
-                            data = res["data"]
-                            if isinstance(data, list):
-                                eventos = data
-                            elif isinstance(data, dict):
-                                eventos = data.get("events", []) or data.get("rows", [])
-                        else:
-                            eventos = res.get("rows", []) or res.get("data", [])
+        for i, params in enumerate(tentativas, 1):
+            try:
+                async with session.get(url, headers=HEADERS_API, params=params, timeout=10) as r:
+                    print(f"ℹ️ [SISTEMA] Tentativa {i}/14 com parâmetros {list(params.keys())}. Status: {r.status}")
                     
-                    print(f"✅ [SISTEMA] API retornou {len(eventos)} eventos com sucesso.")
-                    cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
-                    return eventos
-                elif r.status == 422:
-                    # 2ª Tentativa de Redundância: "season_id" (singular) se o plural for rejeitado
-                    print(f"⚠️ [SISTEMA] Status 422 recebido. A tentar alternativa limpa com 'season_id'...")
-                    params_alt = {
-                        "season_id": str(season_id),
-                        "unique_tournament_id": "16",
-                        "page": "0"
-                    }
-                    async with session.get(url, headers=HEADERS_API, params=params_alt, timeout=12) as r_alt:
-                        print(f"ℹ️ [SISTEMA] API Seasons Events chamada (season_id). Status: {r_alt.status}")
-                        if r_alt.status == 200:
-                            res_alt = await r_alt.json()
-                            eventos = []
-                            if isinstance(res_alt, list):
-                                eventos = res_alt
-                            elif isinstance(res_alt, dict):
-                                if "events" in res_alt and isinstance(res_alt["events"], list):
-                                    eventos = res_alt["events"]
-                                elif "data" in res_alt:
-                                    data_alt = res_alt["data"]
-                                    if isinstance(data_alt, list):
-                                        eventos = data_alt
-                                    elif isinstance(data_alt, dict):
-                                        eventos = data_alt.get("events", []) or data_alt.get("rows", [])
-                                else:
-                                    eventos = res_alt.get("rows", []) or res_alt.get("data", [])
-                            
-                            print(f"✅ [SISTEMA] API retornou {len(eventos)} eventos com sucesso (season_id).")
-                            cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
-                            return eventos
-                        else:
-                            print(f"⚠️ [SISTEMA] Erro na API alternativa (season_id): Código {r_alt.status}")
-                else:
-                    print(f"⚠️ [SISTEMA] Erro na API principal (seasons_id): Código {r.status}")
-        except Exception as e:
-            print(f"❌ [SISTEMA] Falha ao aceder à API de eventos: {e}")
+                    if r.status == 200:
+                        res = await r.json()
+                        eventos = []
+                        if isinstance(res, list):
+                            eventos = res
+                        elif isinstance(res, dict):
+                            if "events" in res and isinstance(res["events"], list):
+                                eventos = res["events"]
+                            elif "data" in res:
+                                data = res["data"]
+                                if isinstance(data, list):
+                                    eventos = data
+                                elif isinstance(data, dict):
+                                    eventos = data.get("events", []) or data.get("rows", [])
+                            else:
+                                eventos = res.get("rows", []) or res.get("data", [])
+                        
+                        print(f"✅ [SISTEMA] SUCESSO na tentativa {i}! Encontrados {len(eventos)} eventos.")
+                        cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
+                        return eventos
+                    elif r.status == 429:
+                        print("⚠️ [SISTEMA] Limitação de tráfego (Rate Limit). A aguardar 2 segundos...")
+                        await asyncio.sleep(2)
+            except Exception as e:
+                print(f"❌ [SISTEMA] Falha na tentativa {i} ({list(params.keys())}): {e}")
+                
+    print("❌ [SISTEMA] ERRO CRÍTICO: Todas as 14 tentativas de parâmetros resultaram em falha.")
     return []
 
 async def obter_tabela_api(session, season_id, letra_grupo):
