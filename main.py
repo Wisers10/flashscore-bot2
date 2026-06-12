@@ -573,7 +573,8 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
         season_id = await obter_season_id(session)
         eventos_api = await obter_resultados_api(session, season_id)
         
-        for j_csv in juegos_filtrados:
+        # CORREÇÃO DO NameError: Alterada a variável de 'juegos_filtrados' para 'jogos_filtrados'
+        for j_csv in jogos_filtrados:
             nome_jogo = j_csv["jogo"]
             hora = j_csv["hora"]
             canal = j_csv["canal"]
