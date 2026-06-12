@@ -261,57 +261,48 @@ async def obter_season_id(session):
     return 52561
 
 async def obter_resultados_api(session, season_id):
-    """Procura os eventos em várias páginas em paralelo para certificar cobertura total"""
+    """Procura os eventos da época. Otimizado para fazer apenas 1 chamada limpa, conservando a cota de RapidAPI"""
     agora = time_module.time()
     if "api_events" in cache_jogos:
         if agora - cache_jogos["api_events"]["timestamp"] < CACHE_EXPIRY:
             return cache_jogos["api_events"]["data"]
 
-    eventos_completos = []
-    # Pedimos as primeiras 6 páginas para garantir que cobrimos todos os jogos do torneio
-    paginas = [0, 1, 2, 3, 4, 5]
+    url = "https://sofasport.p.rapidapi.com/v1/seasons/events"
+    params = {
+        "season_id": str(season_id),
+        "unique_tournament_id": "16",
+        "page": "0"
+    }
     
-    async def buscar_pagina(p):
-        url = "https://sofasport.p.rapidapi.com/v1/seasons/events"
-        params = {
-            "seasons_id": str(season_id),
-            "season_id": str(season_id),
-            "unique_tournament_id": "16",
-            "page": str(p)
-        }
-        async with api_semaphore:
-            try:
-                async with session.get(url, headers=HEADERS_API, params=params, timeout=10) as r:
-                    if r.status == 200:
-                        res = await r.json()
-                        if isinstance(res, list):
-                            return res
-                        if isinstance(res, dict):
-                            # Se os eventos estiverem diretamente na raiz
-                            if "events" in res and isinstance(res["events"], list):
-                                return res["events"]
-                            # Se estiverem encapsulados em "data"
-                            if "data" in res:
-                                data = res["data"]
-                                if isinstance(data, list):
-                                    return data
-                                if isinstance(data, dict):
-                                    return data.get("events", []) or data.get("rows", [])
-                            # Fallback alternativo para outras chaves comuns
-                            return res.get("rows", []) or res.get("data", [])
-            except Exception as e:
-                print(f"⚠️ Erro ao aceder à página {p} na API: {e}")
-        return []
-
-    tarefas = [buscar_pagina(p) for p in paginas]
-    resultados = await asyncio.gather(*tarefas)
-    
-    for r in resultados:
-        if r:
-            eventos_completos.extend(r)
-            
-    cache_jogos["api_events"] = {"data": eventos_completos, "timestamp": agora}
-    return eventos_completos
+    async with api_semaphore:
+        try:
+            async with session.get(url, headers=HEADERS_API, params=params, timeout=12) as r:
+                print(f"ℹ️ [SISTEMA] API Seasons Events chamada. Status: {r.status}")
+                if r.status == 200:
+                    res = await r.json()
+                    eventos = []
+                    if isinstance(res, list):
+                        eventos = res
+                    elif isinstance(res, dict):
+                        if "events" in res and isinstance(res["events"], list):
+                            eventos = res["events"]
+                        elif "data" in res:
+                            data = res["data"]
+                            if isinstance(data, list):
+                                eventos = data
+                            elif isinstance(data, dict):
+                                eventos = data.get("events", []) or data.get("rows", [])
+                        else:
+                            eventos = res.get("rows", []) or res.get("data", [])
+                    
+                    print(f"✅ [SISTEMA] API retornou com sucesso {len(eventos)} jogos do Mundial.")
+                    cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
+                    return eventos
+                else:
+                    print(f"⚠️ [SISTEMA] Erro na API de eventos: Código {r.status}")
+        except Exception as e:
+            print(f"❌ [SISTEMA] Exceção crítica ao aceder à API de eventos: {e}")
+    return []
 
 async def obter_tabela_api(session, season_id, letra_grupo):
     cache_key = f"standings_{letra_grupo.upper()}"
@@ -411,15 +402,28 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
                 casa, fora = traduzir_nome_equipa(partes[0]), traduzir_nome_equipa(partes[1])
                 match_api = None
                 for ev in eventos_api:
-                    api_casa = ev.get("homeTeam", {}).get("name", "")
-                    api_fora = ev.get("awayTeam", {}).get("name", "")
+                    api_casa = ev.get("homeTeam", {}).get("name") or ev.get("homeTeam", {}).get("shortName") or ""
+                    api_fora = ev.get("awayTeam", {}).get("name") or ev.get("awayTeam", {}).get("shortName") or ""
                     if equipas_correspondem(casa, fora, api_casa, api_fora):
                         match_api = ev
                         break
                 
                 if match_api:
-                    gc = match_api.get("homeScore", {}).get("current")
-                    gf = match_api.get("awayScore", {}).get("current")
+                    gc_val = match_api.get("homeScore")
+                    gf_val = match_api.get("awayScore")
+                    
+                    gc = None
+                    gf = None
+                    if isinstance(gc_val, dict):
+                        gc = gc_val.get("current") or gc_val.get("display")
+                    elif isinstance(gc_val, (int, str)):
+                        gc = gc_val
+                        
+                    if isinstance(gf_val, dict):
+                        gf = gf_val.get("current") or gf_val.get("display")
+                    elif isinstance(gf_val, (int, str)):
+                        gf = gf_val
+
                     if gc is not None and gf is not None:
                         resultado_str = f"**{gc}** - **{gf}**"
                         status_type = match_api.get("status", {}).get("type", "")
@@ -493,15 +497,28 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
                 casa, fora = traduzir_nome_equipa(partes[0]), traduzir_nome_equipa(partes[1])
                 match_api = None
                 for ev in eventos_api:
-                    api_casa = ev.get("homeTeam", {}).get("name", "")
-                    api_fora = ev.get("awayTeam", {}).get("name", "")
+                    api_casa = ev.get("homeTeam", {}).get("name") or ev.get("homeTeam", {}).get("shortName") or ""
+                    api_fora = ev.get("awayTeam", {}).get("name") or ev.get("awayTeam", {}).get("shortName") or ""
                     if equipas_correspondem(casa, fora, api_casa, api_fora):
                         match_api = ev
                         break
                 
                 if match_api:
-                    gc = match_api.get("homeScore", {}).get("current")
-                    gf = match_api.get("awayScore", {}).get("current")
+                    gc_val = match_api.get("homeScore")
+                    gf_val = match_api.get("awayScore")
+                    
+                    gc = None
+                    gf = None
+                    if isinstance(gc_val, dict):
+                        gc = gc_val.get("current") or gc_val.get("display")
+                    elif isinstance(gc_val, (int, str)):
+                        gc = gc_val
+                        
+                    if isinstance(gf_val, dict):
+                        gf = gf_val.get("current") or gf_val.get("display")
+                    elif isinstance(gf_val, (int, str)):
+                        gf = gf_val
+
                     if gc is not None and gf is not None:
                         resultado_str = f"**{gc}** - **{gf}**"
                         status_type = match_api.get("status", {}).get("type", "")
@@ -583,12 +600,27 @@ async def processar_comando_grupo(ctx, letra_grupo):
                 casa, fora = traduzir_nome_equipa(partes[0]), traduzir_nome_equipa(partes[1])
                 match_api = None
                 for ev in eventos_api:
-                    if equipas_correspondem(casa, fora, ev.get("homeTeam", {}).get("name", ""), ev.get("awayTeam", {}).get("name", "")):
+                    api_casa = ev.get("homeTeam", {}).get("name") or ev.get("homeTeam", {}).get("shortName") or ""
+                    api_fora = ev.get("awayTeam", {}).get("name") or ev.get("awayTeam", {}).get("shortName") or ""
+                    if equipas_correspondem(casa, fora, api_casa, api_fora):
                         match_api = ev
                         break
                 if match_api:
-                    gc = match_api.get("homeScore", {}).get("current")
-                    gf = match_api.get("awayScore", {}).get("current")
+                    gc_val = match_api.get("homeScore")
+                    gf_val = match_api.get("awayScore")
+                    
+                    gc = None
+                    gf = None
+                    if isinstance(gc_val, dict):
+                        gc = gc_val.get("current") or gc_val.get("display")
+                    elif isinstance(gc_val, (int, str)):
+                        gc = gc_val
+                        
+                    if isinstance(gf_val, dict):
+                        gf = gf_val.get("current") or gf_val.get("display")
+                    elif isinstance(gf_val, (int, str)):
+                        gf = gf_val
+
                     if gc is not None and gf is not None:
                         resultado_str = f"**{gc}** - **{gf}**"
                         status_type = match_api.get("status", {}).get("type", "")
