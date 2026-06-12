@@ -323,41 +323,58 @@ async def obter_resultados_api(session, season_id):
     return eventos_completos
 
 async def obter_incidentes_api(session, event_id):
-    """Descarrega os incidentes e a cronologia do jogo (Golos, Cartões e Substituições) da API em tempo real."""
+    """Descarrega os incidentes e a cronologia do jogo de forma extremamente robusta com caminhos e parâmetros alternativos."""
     cache_key = f"incidents_{event_id}"
     agora = time_module.time()
     if cache_key in cache_jogos:
         if agora - cache_jogos[cache_key]["timestamp"] < 60: # Cache rápido de 60 segundos para eventos ao vivo
             return cache_jogos[cache_key]["data"]
 
-    url = "https://sofasport.p.rapidapi.com/v1/events/incidents"
-    params = {
-        "event_id": str(event_id),
-        "events_id": str(event_id) # Salvaguarda de parâmetros
-    }
+    # Tentativas de combinações de URLs e Parâmetros (singular/plural) para contornar variações da API
+    tentativas = [
+        ("https://sofasport.p.rapidapi.com/v1/events/incidents", {"event_id": str(event_id)}),
+        ("https://sofasport.p.rapidapi.com/v1/event/incidents", {"event_id": str(event_id)}),
+        ("https://sofasport.p.rapidapi.com/v1/events/incidents", {"events_id": str(event_id)}),
+        ("https://sofasport.p.rapidapi.com/v1/event/incidents", {"events_id": str(event_id)}),
+    ]
     
     async with api_semaphore:
-        try:
-            async with session.get(url, headers=HEADERS_API, params=params, timeout=12) as r:
-                print(f"ℹ️ [SISTEMA] API Event Incidents chamada. Status: {r.status}")
-                if r.status == 200:
-                    res = await r.json()
-                    incidents = []
-                    if isinstance(res, list):
-                        incidents = res
-                    elif isinstance(res, dict):
-                        incidents = res.get("data", {}).get("incidents", []) or res.get("incidents", []) or res.get("data", [])
-                    
-                    # Garantir que estão ordenados de forma ascendente por tempo
-                    try:
-                        incidents = sorted(incidents, key=lambda x: x.get("time", 0))
-                    except:
-                        pass
+        for i, (url, params) in enumerate(tentativas, 1):
+            try:
+                async with session.get(url, headers=HEADERS_API, params=params, timeout=10) as r:
+                    print(f"ℹ️ [SISTEMA] Tentativa de incidentes {i}/4 (Status: {r.status}) na URL: {url} com params {list(params.keys())}")
+                    if r.status == 200:
+                        res = await r.json()
+                        incidents = []
+                        if isinstance(res, list):
+                            incidents = res
+                        elif isinstance(res, dict):
+                            if "data" in res:
+                                data = res["data"]
+                                if isinstance(data, list):
+                                    incidents = data
+                                elif isinstance(data, dict):
+                                    incidents = data.get("incidents", []) or data.get("events", []) or data.get("rows", [])
+                            else:
+                                incidents = res.get("incidents", []) or res.get("data", []) or res.get("events", [])
                         
-                    cache_jogos[cache_key] = {"data": incidents, "timestamp": agora}
-                    return incidents
-        except Exception as e:
-            print(f"⚠️ Erro ao aceder a incidentes do jogo {event_id}: {e}")
+                        # Filtro de segurança para garantir que temos uma lista válida
+                        if isinstance(incidents, list) and len(incidents) > 0:
+                            # Ordenar de forma ascendente por tempo de jogo
+                            try:
+                                incidents = sorted(incidents, key=lambda x: x.get("time", 0))
+                            except:
+                                pass
+                            print(f"✅ [SISTEMA] Incidentes obtidos com sucesso! ({len(incidents)} itens na tentativa {i})")
+                            cache_jogos[cache_key] = {"data": incidents, "timestamp": agora}
+                            return incidents
+                        elif isinstance(incidents, list):
+                            print(f"ℹ️ [SISTEMA] API retornou lista vazia de incidentes para o evento {event_id}.")
+                            cache_jogos[cache_key] = {"data": [], "timestamp": agora}
+                            return []
+            except Exception as e:
+                print(f"⚠️ Erro ao tentar obter incidentes na tentativa {i}: {e}")
+                
     return []
 
 async def obter_tabela_api(session, season_id, letra_grupo):
@@ -763,18 +780,32 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
         
         cronologia = []
         for inc in incidents:
-            inc_type = inc.get("incidentType", "").lower()
+            # Varredura inteligente de chaves (incidentType vs type)
+            inc_type = (inc.get("incidentType") or inc.get("type") or "").lower()
             tempo = f"{inc.get('time', 0)}'"
             if inc.get("addedTime"):
                 tempo = f"{inc.get('time', 0)}+{inc.get('addedTime')}'"
                 
-            is_home = inc.get("isHome", True)
+            # Identificação estrita da equipa (isHome / home / isHomeTeam)
+            is_home = inc.get("isHome")
+            if is_home is None:
+                is_home = inc.get("home")
+            if is_home is None:
+                is_home = True
+                
             equipa_inc = casa if is_home else fora
             
-            player_name = inc.get("player", {}).get("name", "Jogador")
+            # Parsing robusto do jogador envolvido
+            p_obj = inc.get("player")
+            if isinstance(p_obj, dict):
+                player_name = p_obj.get("name") or p_obj.get("shortName") or "Jogador"
+            elif isinstance(p_obj, str):
+                player_name = p_obj
+            else:
+                player_name = "Jogador"
             
             if inc_type == "goal":
-                inc_class = inc.get("incidentClass", "").lower()
+                inc_class = (inc.get("incidentClass") or inc.get("class") or "").lower()
                 emoji = "⚽"
                 detalhe = "GOLO!"
                 if inc_class == "penalty":
@@ -784,12 +815,19 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                     emoji = "❌"
                     detalhe = "Auto-Golo!"
                     
-                assist_name = inc.get("assist", {}).get("name")
+                # Parsing robusto do jogador da assistência
+                assist_obj = inc.get("assist")
+                assist_name = None
+                if isinstance(assist_obj, dict):
+                    assist_name = assist_obj.get("name") or assist_obj.get("shortName")
+                elif isinstance(assist_obj, str):
+                    assist_name = assist_obj
+                    
                 assist_str = f" *(Assist. {assist_name})*" if assist_name else ""
                 cronologia.append(f"⏱️ **{tempo}** | {emoji} **{detalhe}** - {equipa_inc}: *{player_name}*{assist_str}")
                 
             elif inc_type == "card":
-                inc_class = inc.get("incidentClass", "").lower()
+                inc_class = (inc.get("incidentClass") or inc.get("class") or "").lower()
                 if "yellowred" in inc_class or "yellow-red" in inc_class:
                     emoji = "🟨🟥"
                     detalhe = "Duplo Amarelo / Vermelho!"
@@ -802,8 +840,21 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                 cronologia.append(f"⏱️ **{tempo}** | {emoji} **{detalhe}** - {equipa_inc}: *{player_name}*")
                 
             elif inc_type == "substitution":
-                player_in = inc.get("playerIn", {}).get("name", "Entra")
-                player_out = inc.get("playerOut", {}).get("name", "Sai")
+                p_in_obj = inc.get("playerIn")
+                p_out_obj = inc.get("playerOut")
+                
+                player_in = "Entra"
+                if isinstance(p_in_obj, dict):
+                    player_in = p_in_obj.get("name") or p_in_obj.get("shortName") or "Jogador"
+                elif isinstance(p_in_obj, str):
+                    player_in = p_in_obj
+                    
+                player_out = "Sai"
+                if isinstance(p_out_obj, dict):
+                    player_out = p_out_obj.get("name") or p_out_obj.get("shortName") or "Jogador"
+                elif isinstance(p_out_obj, str):
+                    player_out = p_out_obj
+                    
                 cronologia.append(f"⏱️ **{tempo}** | 🔄 **Substituição** - {equipa_inc}: 🟢 *{player_in}* por 🔴 *{player_out}*")
         
         if cronologia:
