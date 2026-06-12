@@ -35,80 +35,25 @@ MUNDIAL_DEMO = [
 
 # Dicionário de todas as Seleções Participantes e Atalhos do Mundial 2026
 SELECOES_MUNDIAL = {
-    "portugal": "Portugal",
-    "espanha": "Espanha",
-    "franca": "França",
-    "frança": "França",
-    "brasil": "Brasil",
-    "argentina": "Argentina",
-    "alemanha": "Alemanha",
-    "inglaterra": "Inglaterra",
-    "italia": "Itália",
-    "itália": "Itália",
-    "belgica": "Bélgica",
-    "bélgica": "Bélgica",
-    "holanda": "Países Baixos",
-    "paises_baixos": "Países Baixos",
-    "croacia": "Croácia",
-    "croácia": "Croácia",
-    "suica": "Suíça",
-    "suíça": "Suíça",
-    "uruguai": "Uruguai",
-    "colombia": "Colômbia",
-    "colômbia": "Colômbia",
-    "equador": "Equador",
-    "usa": "Estados Unidos",
-    "eua": "Estados Unidos",
-    "mexico": "México",
-    "méxico": "México",
-    "canada": "Canadá",
-    "canadá": "Canadá",
-    "marrocos": "Marrocos",
-    "senegal": "Senegal",
-    "japao": "Japão",
-    "japão": "Japão",
-    "coreia": "Coreia do Sul",
-    "coreia_do_sul": "Coreia do Sul",
-    "australia": "Austrália",
-    "austrália": "Austrália",
-    "arabia": "Arábia Saudita",
-    "arabia_saudita": "Arábia Saudita",
-    "arábia_saudita": "Arábia Saudita",
-    "camaroes": "Camarões",
-    "camarões": "Camarões",
-    "nigeria": "Nigéria",
-    "nigéria": "Nigéria",
-    "egito": "Egito",
-    "argelia": "Argélia",
-    "argélia": "Argélia",
-    "tunisia": "Tunísia",
-    "tunísia": "Tunísia",
-    "costa_rica": "Costa Rica",
-    "jamaica": "Jamaica",
-    "nova_zelandia": "Nova Zelândia",
-    "nova_zelândia": "Nova Zelândia",
-    "catar": "Catar",
-    "irao": "Irão",
-    "irão": "Irão",
-    "chequia": "Chéquia",
-    "chéquia": "Chéquia",
-    "polonia": "Polónia",
-    "polónia": "Polónia",
-    "turquia": "Turquia",
-    "austria": "Áustria",
-    "áustria": "Áustria",
-    "dinamarca": "Dinamarca",
-    "suecia": "Suécia",
-    "suécia": "Suécia",
-    "ucrania": "Ucrânia",
-    "ucrânia": "Ucrânia",
-    "paraguai": "Paraguai",
-    "chile": "Chile",
-    "peru": "Peru",
-    "venezuela": "Venezuela",
-    "gana": "Gana",
-    "africa_do_sul": "África do Sul",
-    "áfrica_do_sul": "África do Sul"
+    "portugal": "Portugal", "espanha": "Espanha", "franca": "França", "frança": "França",
+    "brasil": "Brasil", "argentina": "Argentina", "alemanha": "Alemanha", "inglaterra": "Inglaterra",
+    "italia": "Itália", "itália": "Itália", "belgica": "Bélgica", "bélgica": "Bélgica",
+    "holanda": "Países Baixos", "paises_baixos": "Países Baixos", "croacia": "Croácia", "croácia": "Croácia",
+    "suica": "Suíça", "suíça": "Suíça", "uruguai": "Uruguai", "colombia": "Colômbia", "colômbia": "Colômbia",
+    "equador": "Equador", "usa": "Estados Unidos", "eua": "Estados Unidos", "mexico": "México",
+    "méxico": "México", "canada": "Canadá", "canadá": "Canadá", "marrocos": "Marrocos",
+    "senegal": "Senegal", "japao": "Japão", "japão": "Japão", "coreia": "Coreia do Sul",
+    "coreia_do_sul": "Coreia do Sul", "australia": "Austrália", "austrália": "Austrália", "arabia": "Arábia Saudita",
+    "arabia_saudita": "Arábia Saudita", "arábia_saudita": "Arábia Saudita", "camaroes": "Camarões",
+    "camarões": "Camarões", "nigeria": "Nigéria", "nigéria": "Nigéria", "egito": "Egito",
+    "argelia": "Argélia", "argélia": "Argélia", "tunisia": "Tunísia", "tunísia": "Tunísia",
+    "costa_rica": "Costa Rica", "jamaica": "Jamaica", "nova_zelandia": "Nova Zelândia",
+    "nova_zelândia": "Nova Zelândia", "catar": "Catar", "irao": "Irão", "irão": "Irão",
+    "chequia": "Chéquia", "chéquia": "Chéquia", "polonia": "Polónia", "polónia": "Polónia",
+    "turquia": "Turquia", "austria": "Áustria", "áustria": "Áustria", "dinamarca": "Dinamarca",
+    "suecia": "Suécia", "suécia": "Suécia", "ucrania": "Ucrânia", "ucrânia": "Ucrânia",
+    "paraguai": "Paraguai", "chile": "Chile", "peru": "Peru", "venezuela": "Venezuela",
+    "gana": "Gana", "africa_do_sul": "África do Sul", "áfrica_do_sul": "África do Sul"
 }
 
 if not DISCORD_TOKEN:
@@ -142,11 +87,9 @@ def carregar_mundial_csv():
         with open(caminho_csv, mode='r', encoding='utf-8-sig') as f:
             reader = csv.reader(f)
             for row in reader:
-                # Remove espaços das pontas, mas PRESERVA as células vazias intactas (evita shifting de colunas)
                 row = [cell.strip() for cell in row]
                 if not any(row): continue
                 
-                # Deteta se a linha é um cabeçalho de Grupo
                 grupo_encontrado = False
                 for cell in row:
                     if not cell: continue
@@ -157,15 +100,12 @@ def carregar_mundial_csv():
                         break
                 if grupo_encontrado: continue
                 
-                # Garante que a linha tem sempre pelo menos 9 colunas para evitar desalinhamento nas leituras
                 row = row + [""] * (9 - len(row))
                 
-                # Garante que a linha tem os campos mínimos e uma data válida na coluna 1
                 if current_group and len(row) >= 5:
                     data_str = row[1]
                     if re.match(r'\d{1,2}[/\-]\d{1,2}[/\-]\d{4}', data_str):
                         jogo_str = row[4]
-                        # A coluna 8 (Canal) agora estará sempre na posição correta
                         canal_str = row[8] if row[8] else "Por definir"
                         
                         jogos.append({
@@ -272,7 +212,7 @@ def equipas_correspondem(csv_casa, csv_fora, api_casa, api_fora):
 
 def equipa_no_jogo(nome_selecao, jogo_csv):
     """Verifica se a seleção pesquisada faz parte do confronto estipulado no CSV"""
-    partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', jogo_csv)]
+    partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', jogo_csv)]
     if len(partes) != 2:
         return False
     
@@ -298,7 +238,12 @@ async def obter_season_id(session):
             async with session.get(url, headers=HEADERS_API, params=params, timeout=10) as r:
                 if r.status == 200:
                     res = await r.json()
-                    seasons = res.get("data", [])
+                    seasons = []
+                    if isinstance(res, dict):
+                        seasons = res.get("data", []) or res.get("seasons", [])
+                    elif isinstance(res, list):
+                        seasons = res
+                        
                     for s in seasons:
                         if "2026" in s.get("name", "") or s.get("year") == "2026":
                             sid = s.get("id")
@@ -319,14 +264,33 @@ async def obter_resultados_api(session, season_id):
             return cache_jogos["api_events"]["data"]
 
     url = "https://sofasport.p.rapidapi.com/v1/seasons/events"
-    params = {"seasons_id": str(season_id), "unique_tournament_id": "16", "page": "0"}
+    # Fornece tanto season_id como seasons_id para máxima compatibilidade com a API
+    params = {
+        "seasons_id": str(season_id),
+        "season_id": str(season_id),
+        "unique_tournament_id": "16",
+        "page": "0"
+    }
     
     async with api_semaphore:
         try:
             async with session.get(url, headers=HEADERS_API, params=params, timeout=15) as r:
                 if r.status == 200:
                     res = await r.json()
-                    eventos = res.get("data", {}).get("events", []) or res.get("data", [])
+                    eventos = []
+                    if isinstance(res, dict):
+                        data = res.get("data", {})
+                        if isinstance(data, dict):
+                            eventos = data.get("events", []) or data.get("rows", [])
+                            if not eventos and isinstance(data, list):
+                                eventos = data
+                        elif isinstance(data, list):
+                            eventos = data
+                        if not eventos:
+                            eventos = res.get("events", []) or res.get("data", [])
+                    elif isinstance(res, list):
+                        eventos = res
+                        
                     cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
                     return eventos
         except Exception as e:
@@ -341,14 +305,26 @@ async def obter_tabela_api(session, season_id, letra_grupo):
             return cache_jogos[cache_key]["data"]
 
     url = "https://sofasport.p.rapidapi.com/v1/seasons/standings"
-    params = {"seasons_id": str(season_id), "unique_tournament_id": "16", "standing_type": "total"}
+    params = {
+        "seasons_id": str(season_id),
+        "season_id": str(season_id),
+        "unique_tournament_id": "16",
+        "standing_type": "total"
+    }
     
     async with api_semaphore:
         try:
             async with session.get(url, headers=HEADERS_API, params=params, timeout=15) as r:
                 if r.status == 200:
                     res = await r.json()
-                    grupos_data = res.get("data", []) or res.get("data", {}).get("standings", [])
+                    grupos_data = []
+                    if isinstance(res, dict):
+                        grupos_data = res.get("data", []) or res.get("standings", [])
+                        if isinstance(grupos_data, dict):
+                            grupos_data = grupos_data.get("standings", []) or [grupos_data]
+                    elif isinstance(res, list):
+                        grupos_data = res
+                        
                     for g in grupos_data:
                         nome_grupo = g.get("name", "").upper()
                         if f"GROUP {letra_grupo.upper()}" in nome_grupo or f"GRUPO {letra_grupo.upper()}" in nome_grupo or nome_grupo.endswith(f" {letra_grupo.upper()}"):
@@ -411,7 +387,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
             hora = j_csv["hora"]
             canal = j_csv["canal"]
             
-            partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', nome_jogo)]
+            partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
             resultado_str = "vs"
             status_direto = ""
             
@@ -466,7 +442,6 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
         msg = await canal_ou_ctx.send(f"🚀 A procurar calendário para **{nome_selecao}**...")
         
     jogos_csv = carregar_mundial_csv()
-    # Filtra os jogos do CSV onde a seleção joga (Casa ou Fora)
     jogos_filtrados = [j for j in jogos_csv if equipa_no_jogo(nome_selecao, j["jogo"])]
     
     if not jogos_filtrados:
@@ -475,7 +450,6 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
         else: await canal_ou_ctx.send(aviso)
         return
 
-    # Determinar a cor estética com base no nome do país pesquisado
     cor_embed = 0x3498db
     p_lower = nome_selecao.lower()
     if "portugal" in p_lower: cor_embed = 0xe74c3c
@@ -495,7 +469,7 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
             canal = j_csv["canal"]
             data = j_csv["data"]
             
-            partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', nome_jogo)]
+            partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
             resultado_str = "vs"
             status_direto = ""
             
@@ -585,7 +559,7 @@ async def processar_comando_grupo(ctx, letra_grupo):
         linhas_jogos = []
         for j_g in jogos_grupo:
             nome_jogo = j_g["jogo"]
-            partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', nome_jogo)]
+            partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
             resultado_str = "vs"
             status_direto = ""
             
@@ -614,11 +588,11 @@ async def processar_comando_grupo(ctx, letra_grupo):
         embed.add_field(name="🥅 Calendário & Resultados", value="\n".join(linhas_jogos), inline=False)
         await ctx.send(embed=embed)
 
-# ================= TAREFA AUTOMÁTICA DIÁRIA =================
+# ================= TAREFA AUTOMÁTICA DIÁRIA (MEIA NOITE PORTUGAL) =================
 
-@tasks.loop(time=time(hour=23, minute=0, tzinfo=timezone.utc)) # 00:00 Portugal (UTC+1)
+@tasks.loop(time=time(hour=23, minute=0, tzinfo=timezone.utc)) # 23:00 UTC = 00:00 (Meia-Noite) em Portugal (UTC+1)
 async def notificacao_diaria():
-    print(f"⏰ [AUTOMÁTICO] A enviar agenda diária do Mundial...")
+    print(f"⏰ [AUTOMÁTICO] A enviar agenda diária do Mundial à meia-noite...")
     canal = bot.get_channel(ID_CANAL_NOTIFICACOES)
     if canal:
         hoje_pt = (datetime.now(timezone.utc) + OFFSET_PT).date()
