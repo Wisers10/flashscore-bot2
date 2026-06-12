@@ -260,24 +260,25 @@ async def obter_season_id(session):
             print(f"⚠️ Erro ao procurar season_id na API: {e}")
     return 52561
 
-async def obter_resultados_api(session):
-    """Procura os eventos do torneio. Corrigido parâmetros para evitar o Erro 422 da API."""
+async def obter_resultados_api(session, season_id):
+    """Procura os eventos da época. Trata dinamicamente se a chave é singular ou plural para evitar Status 422."""
     agora = time_module.time()
     if "api_events" in cache_jogos:
         if agora - cache_jogos["api_events"]["timestamp"] < CACHE_EXPIRY:
             return cache_jogos["api_events"]["data"]
 
-    url = "https://sofasport.p.rapidapi.com/v1/unique-tournaments/events"
-    # Parâmetros estritos exigidos por esta rota da API SofaSport
+    url = "https://sofasport.p.rapidapi.com/v1/seasons/events"
+    
+    # 1ª Tentativa: "season_id" (singular, padrão oficial de eventos)
     params = {
-        "unique_tournament_id": "16",
+        "season_id": str(season_id),
         "page": "0"
     }
     
     async with api_semaphore:
         try:
             async with session.get(url, headers=HEADERS_API, params=params, timeout=12) as r:
-                print(f"ℹ️ [SISTEMA] API Unique Tournaments Events chamada. Status: {r.status}")
+                print(f"ℹ️ [SISTEMA] API Seasons Events chamada (season_id). Status: {r.status}")
                 if r.status == 200:
                     res = await r.json()
                     eventos = []
@@ -295,11 +296,42 @@ async def obter_resultados_api(session):
                         else:
                             eventos = res.get("rows", []) or res.get("data", [])
                     
-                    print(f"✅ [SISTEMA] API retornou {len(eventos)} eventos com sucesso.")
+                    print(f"✅ [SISTEMA] API retornou {len(eventos)} eventos com sucesso (season_id).")
                     cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
                     return eventos
+                elif r.status == 422:
+                    # 2ª Tentativa: "seasons_id" (plural, em caso de inconsistência no endpoint da SofaSport)
+                    print(f"⚠️ [SISTEMA] Status 422 recebido. A tentar alternativa limpa com 'seasons_id'...")
+                    params_alt = {
+                        "seasons_id": str(season_id),
+                        "page": "0"
+                    }
+                    async with session.get(url, headers=HEADERS_API, params=params_alt, timeout=12) as r_alt:
+                        print(f"ℹ️ [SISTEMA] API Seasons Events chamada (seasons_id). Status: {r_alt.status}")
+                        if r_alt.status == 200:
+                            res_alt = await r_alt.json()
+                            eventos = []
+                            if isinstance(res_alt, list):
+                                eventos = res_alt
+                            elif isinstance(res_alt, dict):
+                                if "events" in res_alt and isinstance(res_alt["events"], list):
+                                    eventos = res_alt["events"]
+                                elif "data" in res_alt:
+                                    data_alt = res_alt["data"]
+                                    if isinstance(data_alt, list):
+                                        eventos = data_alt
+                                    elif isinstance(data_alt, dict):
+                                        eventos = data_alt.get("events", []) or data_alt.get("rows", [])
+                                else:
+                                    eventos = res_alt.get("rows", []) or res_alt.get("data", [])
+                            
+                            print(f"✅ [SISTEMA] API retornou {len(eventos)} eventos com sucesso (seasons_id).")
+                            cache_jogos["api_events"] = {"data": eventos, "timestamp": agora}
+                            return eventos
+                        else:
+                            print(f"⚠️ [SISTEMA] Erro na API alternativa (seasons_id): Código {r_alt.status}")
                 else:
-                    print(f"⚠️ [SISTEMA] Erro na API de eventos: Código {r.status}")
+                    print(f"⚠️ [SISTEMA] Erro na API principal (season_id): Código {r.status}")
         except Exception as e:
             print(f"❌ [SISTEMA] Falha ao aceder à API de eventos: {e}")
     return []
@@ -385,7 +417,8 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
         return
 
     async with aiohttp.ClientSession() as session:
-        eventos_api = await obter_resultados_api(session)
+        season_id = await obter_season_id(session)
+        eventos_api = await obter_resultados_api(session, season_id)
         
         for j_csv in jogos_do_dia:
             encontrou = True
@@ -478,7 +511,8 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
     embed = discord.Embed(title=f"⚽ Calendário: {nome_selecao.upper()}", color=cor_embed)
     
     async with aiohttp.ClientSession() as session:
-        eventos_api = await obter_resultados_api(session)
+        season_id = await obter_season_id(session)
+        eventos_api = await obter_resultados_api(session, season_id)
         
         for j_csv in jogos_filtrados:
             nome_jogo = j_csv["jogo"]
@@ -580,7 +614,7 @@ async def processar_comando_grupo(ctx, letra_grupo):
         embed.add_field(name="📊 Tabela Classificativa (Em Direto)", value=tabela_texto, inline=False)
         
         # Mostra o calendário e canais do Excel corrigidos
-        eventos_api = await obter_resultados_api(session)
+        eventos_api = await obter_resultados_api(session, season_id)
         jogos_csv = carregar_mundial_csv()
         jogos_grupo = [jg for jg in jogos_csv if jg["grupo"] == letra_grupo]
         
