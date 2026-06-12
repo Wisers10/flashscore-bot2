@@ -216,8 +216,8 @@ def equipas_correspondem(csv_casa, csv_fora, api_casa, api_fora):
     return match_casa and match_fora
 
 def equipa_no_jogo(nome_selecao, jogo_csv):
-    """Verifica se a seleção pesquisada faz parte do confronto estipulado no CSV"""
-    partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', jogo_csv)]
+    """Verifica se a seleção pesquisada faz parte do confronto estipulado no CSV com regex de espaçamento estrito"""
+    partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', jogo_csv)]
     if len(partes) != 2:
         return False
     
@@ -358,7 +358,7 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
             hora = j_csv["hora"]
             canal = j_csv["canal"]
             
-            partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', nome_jogo)]
+            partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
             status_direto = ""
             
             if len(partes) == 2:
@@ -449,7 +449,7 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
             canal = j_csv["canal"]
             data = j_csv["data"]
             
-            partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', nome_jogo)]
+            partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
             status_direto = ""
             
             if len(partes) == 2:
@@ -544,7 +544,7 @@ async def processar_comando_grupo(ctx, letra_grupo):
         linhas_jogos = []
         for j_g in jogos_grupo:
             nome_jogo = j_g["jogo"]
-            partes = [p.strip() for p in re.split(r'\s*[xX]\s*|\s+vs\s+', nome_jogo)]
+            partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
             status_direto = ""
             
             if len(partes) == 2:
