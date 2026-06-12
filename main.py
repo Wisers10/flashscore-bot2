@@ -284,18 +284,21 @@ async def obter_resultados_api(session, season_id):
                 async with session.get(url, headers=HEADERS_API, params=params, timeout=10) as r:
                     if r.status == 200:
                         res = await r.json()
-                        if isinstance(res, dict):
-                            data = res.get("data", {})
-                            if isinstance(data, dict):
-                                evs = data.get("events", []) or data.get("rows", [])
-                                if not evs and isinstance(data, list):
-                                    evs = data
-                                return evs
-                            elif isinstance(data, list):
-                                return data
-                            return res.get("events", []) or res.get("data", [])
-                        elif isinstance(res, list):
+                        if isinstance(res, list):
                             return res
+                        if isinstance(res, dict):
+                            # Se os eventos estiverem diretamente na raiz
+                            if "events" in res and isinstance(res["events"], list):
+                                return res["events"]
+                            # Se estiverem encapsulados em "data"
+                            if "data" in res:
+                                data = res["data"]
+                                if isinstance(data, list):
+                                    return data
+                                if isinstance(data, dict):
+                                    return data.get("events", []) or data.get("rows", [])
+                            # Fallback alternativo para outras chaves comuns
+                            return res.get("rows", []) or res.get("data", [])
             except Exception as e:
                 print(f"⚠️ Erro ao aceder à página {p} na API: {e}")
         return []
