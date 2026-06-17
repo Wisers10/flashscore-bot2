@@ -200,7 +200,18 @@ def traduzir_nome_equipa(nome):
         "Uruguay": "Uruguai",
         "DR Congo": "RD Congo",
         "Democratic Republic of the Congo": "RD Congo",
-        "Haiti": "Haiti"
+        "Haiti": "Haiti",
+        "Ecuador": "Equador",
+        "Colombia": "Colômbia",
+        "Panama": "Panamá",
+        "Algeria": "Argélia",
+        "Tunisia": "Tunísia",
+        "Sweden": "Suécia",
+        "Denmark": "Dinamarca",
+        "Ghana": "Gana",
+        "Chile": "Chile",
+        "Peru": "Peru",
+        "Venezuela": "Venezuela"
     }
     for k, v in traducoes.items():
         if k.lower() == nome.lower():
@@ -218,7 +229,7 @@ def simplificar_nome_busca(nome):
         "belgica": "belgium", "inglaterra": "england", "suica": "switzerland",
         "suecia": "sweden", "marrocos": "morocco", "camaroes": "cameroon",
         "croacia": "croatia", "brasil": "brazil", "estados unidos": "usa",
-        "united states": "usa", "arabia saudita": "saudi arabia", "africa do sul": "south africa",
+        "united states": "usa", "eua": "usa", "arabia saudita": "saudi arabia", "africa do sul": "south africa",
         "bosnia e herzegovina": "bosnia", "bosnia and herzegovina": "bosnia", "bosnia & herzegovina": "bosnia",
         "bosnia & h.": "bosnia", "bosnia & h": "bosnia", "bosnia and h": "bosnia", "bosnia and h.": "bosnia",
         "holanda": "netherlands", "paises baixos": "netherlands",
@@ -231,7 +242,14 @@ def simplificar_nome_busca(nome):
         "egito": "egypt",
         "nova zelandia": "new zealand",
         "uruguai": "uruguay",
-        "rd congo": "dr congo", "democratic republic of the congo": "dr congo", "republica democratica do congo": "dr congo"
+        "rd congo": "dr congo", "democratic republic of the congo": "dr congo", "republica democratica do congo": "dr congo",
+        "equador": "ecuador",
+        "colombia": "colombia",
+        "panama": "panama",
+        "argelia": "algeria",
+        "tunisia": "tunisia",
+        "dinamarca": "denmark",
+        "gana": "ghana"
     }
     for k, v in traducoes_busca.items():
         nome = nome.replace(k, v)
@@ -1004,7 +1022,7 @@ async def grupo_f(ctx): await processar_comando_grupo(ctx, "F")
 async def grupo_g(ctx): await processar_comando_grupo(ctx, "G")
 
 @bot.command(aliases=['grupoh', 'grupoH'])
-async def grupo_h(ctx): await processar_comando_grupo(ctx, "H")
+async def group_h(ctx): await processar_comando_grupo(ctx, "H")
 
 @bot.command(aliases=['grupoi', 'grupoI'])
 async def grupo_i(ctx): await processar_comando_grupo(ctx, "I")
