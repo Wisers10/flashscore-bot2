@@ -53,7 +53,10 @@ SELECOES_MUNDIAL = {
     "turquia": "Turquia", "austria": "Áustria", "áustria": "Áustria", "dinamarca": "Dinamarca",
     "suecia": "Suécia", "suécia": "Suécia", "ucrania": "Ucrânia", "ucrânia": "Ucrânia",
     "paraguai": "Paraguai", "chile": "Chile", "peru": "Peru", "venezuela": "Venezuela",
-    "gana": "Gana", "africa_do_sul": "África do Sul", "áfrica_do_sul": "África do Sul"
+    "gana": "Gana", "africa_do_sul": "África do Sul", "áfrica_do_sul": "África do Sul",
+    "haiti": "Haiti", "escocia": "Escócia", "escócia": "Escócia",
+    "curacau": "Curaçau", "curaçau": "Curaçau",
+    "costa_do_marfim": "Costa do Marfim", "rd_congo": "RD Congo", "rdcongo": "RD Congo", "dr_congo": "RD Congo"
 }
 
 if not DISCORD_TOKEN:
@@ -182,7 +185,22 @@ def traduzir_nome_equipa(nome):
         "Turkey": "Turquia",
         "Austria": "Áustria",
         "Ukraine": "Ucrânia",
-        "Italy": "Itália"
+        "Italy": "Itália",
+        "Scotland": "Escócia",
+        "Paraguay": "Paraguai",
+        "Türkiye": "Turquia",
+        "Turkiye": "Turquia",
+        "Curacao": "Curaçau",
+        "Curaçao": "Curaçau",
+        "Ivory Coast": "Costa do Marfim",
+        "Cote d'Ivoire": "Costa do Marfim",
+        "Côte d'Ivoire": "Costa do Marfim",
+        "Egypt": "Egito",
+        "New Zealand": "Nova Zelândia",
+        "Uruguay": "Uruguai",
+        "DR Congo": "RD Congo",
+        "Democratic Republic of the Congo": "RD Congo",
+        "Haiti": "Haiti"
     }
     for k, v in traducoes.items():
         if k.lower() == nome.lower():
@@ -205,7 +223,15 @@ def simplificar_nome_busca(nome):
         "bosnia & h.": "bosnia", "bosnia & h": "bosnia", "bosnia and h": "bosnia", "bosnia and h.": "bosnia",
         "holanda": "netherlands", "paises baixos": "netherlands",
         "catar": "qatar", "irao": "iran", "japao": "japan", "polonia": "poland",
-        "turquia": "turkey", "austria": "austria", "ucrania": "ukraine", "italia": "italy"
+        "turquia": "turkey", "turkiye": "turkey", "austria": "austria", "ucrania": "ukraine", "italia": "italy",
+        "escocia": "scotland",
+        "paraguai": "paraguay",
+        "curacau": "curacao",
+        "costa do marfim": "ivory coast", "cote divoire": "ivory coast", "cote d'ivoire": "ivory coast",
+        "egito": "egypt",
+        "nova zelandia": "new zealand",
+        "uruguai": "uruguay",
+        "rd congo": "dr congo", "democratic republic of the congo": "dr congo", "republica democratica do congo": "dr congo"
     }
     for k, v in traducoes_busca.items():
         nome = nome.replace(k, v)
