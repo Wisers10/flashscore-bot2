@@ -56,7 +56,10 @@ SELECOES_MUNDIAL = {
     "gana": "Gana", "africa_do_sul": "África do Sul", "áfrica_do_sul": "África do Sul",
     "haiti": "Haiti", "escocia": "Escócia", "escócia": "Escócia",
     "curacau": "Curaçau", "curaçau": "Curaçau",
-    "costa_do_marfim": "Costa do Marfim", "rd_congo": "RD Congo", "rdcongo": "RD Congo", "dr_congo": "RD Congo"
+    "costa_do_marfim": "Costa do Marfim", "rd_congo": "RD Congo", "rdcongo": "RD Congo", "dr_congo": "RD Congo",
+    "uzbequistao": "Uzbequistão", "uzbequistão": "Uzbequistão",
+    "iraque": "Iraque", "eslovaquia": "Eslováquia", "eslovaquia": "Eslováquia",
+    "eslovenia": "Eslovénia", "eslovénia": "Eslovénia", "romenia": "Roménia", "roménia": "Roménia"
 }
 
 if not DISCORD_TOKEN:
@@ -211,7 +214,12 @@ def traduzir_nome_equipa(nome):
         "Ghana": "Gana",
         "Chile": "Chile",
         "Peru": "Peru",
-        "Venezuela": "Venezuela"
+        "Venezuela": "Venezuela",
+        "Uzbekistan": "Uzbequistão",
+        "Iraq": "Iraque",
+        "Slovakia": "Eslováquia",
+        "Slovenia": "Eslovénia",
+        "Romania": "Roménia"
     }
     for k, v in traducoes.items():
         if k.lower() == nome.lower():
@@ -249,7 +257,12 @@ def simplificar_nome_busca(nome):
         "argelia": "algeria",
         "tunisia": "tunisia",
         "dinamarca": "denmark",
-        "gana": "ghana"
+        "gana": "ghana",
+        "uzbequistao": "uzbekistan",
+        "iraque": "iraq",
+        "eslovaquia": "slovakia",
+        "eslovenia": "slovenia",
+        "romenia": "romania"
     }
     for k, v in traducoes_busca.items():
         nome = nome.replace(k, v)
