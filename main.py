@@ -78,13 +78,13 @@ HEADERS_API = {
     'x-rapidapi-key': API_KEY
 }
 
-# ================= CARREGAMENTO DO CSV DO EXCEL =================
+# ================= CARREGAMENTO DE FICHEIROS CSV (GRUPOS + ELIMINATÓRIAS) =================
 
 def carregar_mundial_csv():
-    """Lê o mundial.csv preservando índices vazios de forma estrita, suportando fase de grupos e eliminatórias"""
+    """Lê o mundial.csv da fase de grupos preservando índices vazios e extraindo golos"""
     caminho_csv = "mundial.csv"
     if not os.path.exists(caminho_csv):
-        print("ℹ️ [SISTEMA] 'mundial.csv' não encontrado. A usar dados padrão de teste (Grupo A).")
+        print("ℹ️ [SISTEMA] 'mundial.csv' não encontrado. A usar dados padrão de teste.")
         return MUNDIAL_DEMO
     
     jogos = []
@@ -93,11 +93,10 @@ def carregar_mundial_csv():
         with open(caminho_csv, mode='r', encoding='utf-8-sig') as f:
             reader = csv.reader(f)
             for row in reader:
-                # Remove espaços das pontas, mas PRESERVA as células vazias intactas (evita shifting de colunas)
                 row = [cell.strip() for cell in row]
                 if not any(row): continue
                 
-                # Deteta se a linha é um cabeçalho de Grupo
+                # Deteta cabeçalho de grupo
                 grupo_encontrado = False
                 for cell in row:
                     if not cell: continue
@@ -108,36 +107,121 @@ def carregar_mundial_csv():
                         break
                 if grupo_encontrado: continue
                 
-                # Garante que a linha tem sempre pelo menos 9 colunas para evitar desalinhamento nas leituras
                 row = row + [""] * (9 - len(row))
                 
-                fase_str = row[0] if row[0] else ""
-                fase_simp = simplificar_nome_busca(fase_str)
-                is_knockout = any(f in fase_simp for f in ["r32", "r16", "qf", "sf", "1/16", "1/8", "1/4", "1/2", "oitav", "quart", "meia", "final"])
-                
-                # Garante que a linha tem os campos mínimos e uma data válida na coluna 1
-                if (current_group or is_knockout) and len(row) >= 5:
+                if current_group and len(row) >= 5:
                     data_str = row[1]
                     if re.match(r'\d{1,2}[/\-]\d{1,2}[/\-]\d{4}', data_str):
                         jogo_str = row[4]
-                        # A coluna 8 (Canal) agora estará sempre na posição correta
+                        
+                        # Extração de golos locais do CSV
+                        golos_casa = None
+                        golos_fora = None
+                        try:
+                            if row[5] != "" and row[5].isdigit():
+                                golos_casa = int(row[5])
+                            if row[7] != "" and row[7].isdigit():
+                                golos_fora = int(row[7])
+                        except:
+                            pass
+                        
                         canal_str = row[8] if row[8] else "Por definir"
                         
                         jogos.append({
-                            "grupo": "KO" if is_knockout else current_group,
-                            "fase": fase_str,
+                            "grupo": current_group,
+                            "fase": row[0] if row[0] else "",
                             "data": data_str,
                             "dia": row[2] if row[2] else "",
                             "hora": row[3] if row[3] else "",
                             "jogo": jogo_str,
-                            "canal": canal_str
+                            "golos_casa": golos_casa,
+                            "golos_fora": golos_fora,
+                            "canal": canal_str,
+                            "is_ko": False
                         })
         return jogos
     except Exception as e:
         print(f"❌ [SISTEMA] Erro ao carregar mundial.csv: {e}")
         return MUNDIAL_DEMO
 
-# ================= INTELIGÊNCIA DE NOMES E ABREVIAÇÕES =================
+def carregar_eliminatorias_csv():
+    """Lê o mundial_fase_eliminatoria.csv de forma robusta e mapeia os seus jogos."""
+    caminho_csv = "mundial_fase_eliminatoria.csv"
+    if not os.path.exists(caminho_csv):
+        print("ℹ️ [SISTEMA] 'mundial_fase_eliminatoria.csv' não encontrado.")
+        return []
+    
+    jogos = []
+    try:
+        with open(caminho_csv, mode='r', encoding='utf-8-sig') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                row = [cell.strip() for cell in row]
+                if not any(row): continue
+                if "FASE ELIMINATÓRIA" in row[0] or "Fase,Nº Jogo" in "".join(row) or "Nº Jogo" in row[0] or "Calendário" in row[0]:
+                    continue
+                
+                # Garante dimensão mínima de colunas
+                row = row + [""] * (9 - len(row))
+                
+                if len(row) >= 5:
+                    fase = row[0]
+                    num_jogo = row[1]
+                    data_str = row[2]
+                    dia = row[3]
+                    jogo_str = row[4]
+                    
+                    # Extração de golos locais do CSV de eliminatórias
+                    golos_casa = None
+                    golos_fora = None
+                    try:
+                        if row[5] != "" and row[5].isdigit():
+                            golos_casa = int(row[5])
+                        if row[7] != "" and row[7].isdigit():
+                            golos_fora = int(row[7])
+                    except:
+                        pass
+                        
+                    estadio_canal = row[8] if row[8] else "A definir"
+                    
+                    jogos.append({
+                        "grupo": "KO",
+                        "fase": fase,
+                        "num_jogo": num_jogo,
+                        "data": data_str,
+                        "dia": dia,
+                        "hora": "TBD", # Hora será preenchida dinamicamente pela API se sincronizada
+                        "jogo": jogo_str,
+                        "golos_casa": golos_casa,
+                        "golos_fora": golos_fora,
+                        "canal": estadio_canal,
+                        "is_ko": True
+                    })
+        return jogos
+    except Exception as e:
+        print(f"❌ [SISTEMA] Erro ao carregar mundial_fase_eliminatoria.csv: {e}")
+        return []
+
+def carregar_calendario_hibrido():
+    """Unifica os jogos da Fase de Grupos e da Fase a Eliminar"""
+    return carregar_mundial_csv() + carregar_eliminatorias_csv()
+
+# ================= INTELIGÊNCIA DE NOMES, TRADUÇÕES E BRACKET =================
+
+def normalizar_fase_ko(fase):
+    """Normaliza o nome da fase para categorias limpas da bracket."""
+    f = simplificar_nome_busca(fase)
+    if "32" in f or "1/16" in f or "dezasseis" in f:
+        return "Dezasseis-avos-de-final (R32)"
+    if "oitav" in f or "r16" in f or "1/8" in f or "16" in f:
+        return "Oitavos-de-final (R16)"
+    if "quart" in f or "qf" in f or "1/4" in f or "8" in f:
+        return "Quartos-de-final (QF)"
+    if "meia" in f or "sf" in f or "1/2" in f or "4" in f:
+        return "Meias-finais (SF)"
+    if "final" in f:
+        return "Grande Final"
+    return fase
 
 def abreviar_nome(nome, max_len=10):
     """Garante que equipas compridas são abreviadas elegantemente para a tabela do Discord"""
@@ -303,21 +387,6 @@ def equipa_no_jogo(nome_selecao, jogo_csv):
     s_fora = simplificar_nome_busca(partes[1])
     
     return s_selecao in s_casa or s_selecao in s_fora
-
-def normalizar_fase_ko(fase):
-    """Normaliza o nome da fase a eliminar para uma categoria estandardizada."""
-    f = simplificar_nome_busca(fase)
-    if "r32" in f or "1/16" in f or "32" in f or "dezasseis" in f:
-        return "Dezasseis-avos-de-final (R32)"
-    if "r16" in f or "1/8" in f or "16" in f or "oitav" in f:
-        return "Oitavos-de-final (R16)"
-    if "qf" in f or "1/4" in f or "quart" in f or "8" in f:
-        return "Quartos-de-final (QF)"
-    if "sf" in f or "1/2" in f or "meia" in f or "4" in f:
-        return "Meias-finais (SF)"
-    if "final" in f or "f" == f or "2" in f:
-        return "Grande Final"
-    return "Dezasseis-avos-de-final (R32)"
 
 # ================= INTEGRAÇÃO COM A API SOFASPORT =================
 
@@ -519,13 +588,15 @@ async def criar_evento_discord(guild, nome_jogo, data_inicio_utc, liga, tv_info=
 async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
     msg = None
     if isinstance(canal_ou_ctx, commands.Context):
-        msg = await canal_ou_ctx.send(f"🚀 A ligar ao motor híbrido (CSV + API em direto)...")
+        msg = await canal_ou_ctx.send(f"🚀 A ligar ao motor híbrido (CSVs + API em direto)...")
     
     embed = discord.Embed(title=f"🏆 {titulo}", color=0xe67e22)
     encontrou = False
     
     data_str_pesquisa = data_alvo_pt.strftime("%d/%m/%Y") if data_alvo_pt else None
-    jogos_csv = carregar_mundial_csv()
+    
+    # Carrega todo o calendário unificado (Grupo + Eliminatórias)
+    jogos_csv = carregar_calendario_hibrido()
     jogos_do_dia = [j for j in jogos_csv if not data_str_pesquisa or j["data"] == data_str_pesquisa]
     
     if not jogos_do_dia:
@@ -534,72 +605,100 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
         else: await canal_ou_ctx.send(aviso)
         return
 
-    # Ordenar jogos de forma estritamente cronológica por hora de Portugal
-    # Jogos com hora "TBD" (Por definir) são empurrados para o fim da lista
-    jogos_do_dia = sorted(
-        jogos_do_dia, 
-        key=lambda x: x["hora"] if x["hora"] and x["hora"].upper() != "TBD" else "99:99"
-    )
-
     async with aiohttp.ClientSession() as session:
         season_id = await obter_season_id(session)
         eventos_api = await obter_resultados_api(session, season_id)
         
+        resolved_games = []
         for j_csv in jogos_do_dia:
             encontrou = True
             nome_jogo = j_csv["jogo"]
-            hora = j_csv["hora"]
-            canal = j_csv["canal"]
+            local_gc = j_csv.get("golos_casa")
+            local_gf = j_csv.get("golos_fora")
             
+            resolved_hour = j_csv["hora"] if j_csv["hora"] else "TBD"
             partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
-            status_direto = ""
             
+            status_direto = ""
+            resolved_score = "vs"
+            casa = partes[0] if len(partes) == 2 else nome_jogo
+            fora = partes[1] if len(partes) == 2 else ""
+            
+            match_api = None
             if len(partes) == 2:
-                casa, fora = traduzir_nome_equipa(partes[0]), traduzir_nome_equipa(partes[1])
-                match_api = None
+                casa_tr = traduzir_nome_equipa(casa)
+                fora_tr = traduzir_nome_equipa(fora)
                 for ev in eventos_api:
                     api_casa = ev.get("homeTeam", {}).get("name", "")
                     api_fora = ev.get("awayTeam", {}).get("name", "")
-                    if equipas_correspondem(casa, fora, api_casa, api_fora):
+                    if equipas_correspondem(casa_tr, fora_tr, api_casa, api_fora):
                         match_api = ev
                         break
-                
-                if match_api:
-                    gc = match_api.get("homeScore", {}).get("current")
-                    gf = match_api.get("awayScore", {}).get("current")
+            
+            # Resolve placar e hora
+            if match_api:
+                # Sincroniza a hora dinamicamente caso a API SofaSport tenha a data oficial de kick-off
+                ts = match_api.get("startTimestamp")
+                if ts:
+                    dt_pt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(timezone(OFFSET_PT))
+                    resolved_hour = dt_pt.strftime("%H:%M")
                     
-                    # Formato Premium: Seleção [Golos] vs Seleção [Golos]
-                    if gc is not None and gf is not None:
-                        status_type = match_api.get("status", {}).get("type", "")
-                        status_desc = match_api.get("status", {}).get("description", "")
-                        if status_type == "inprogress":
-                            status_direto = f" 🟢 *({status_desc})*"
-                        elif status_type == "finished":
-                            status_direto = " 🔴 *(Terminado)*"
-                        nome_jogo_formatado = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
-                    else:
-                        nome_jogo_formatado = f"**{casa}** vs **{fora}**"
+                api_gc = match_api.get("homeScore", {}).get("current")
+                api_gf = match_api.get("awayScore", {}).get("current")
+                
+                if api_gc is not None and api_gf is not None:
+                    status_type = match_api.get("status", {}).get("type", "")
+                    status_desc = match_api.get("status", {}).get("description", "")
+                    if status_type == "inprogress":
+                        status_direto = f" 🟢 *({status_desc})*"
+                    elif status_type == "finished":
+                        status_direto = " 🔴 *(Terminado)*"
+                    resolved_score = f"**{casa} [{api_gc}]** vs **{fora} [{api_gf}]**{status_direto}"
                 else:
-                    nome_jogo_formatado = f"**{casa}** vs **{fora}**"
+                    # Fallback para o golos do teu CSV caso o jogo já tenha sido preenchido
+                    if local_gc is not None and local_gf is not None:
+                        resolved_score = f"**{casa} [{local_gc}]** vs **{fora} [{local_gf}]** 🔴 *(Terminado)*"
+                    else:
+                        resolved_score = f"**{casa}** vs **{fora}**"
             else:
-                nome_jogo_formatado = f"**{nome_jogo}**"
+                # Sem API, tenta usar os golos inseridos manualmente no CSV
+                if local_gc is not None and local_gf is not None:
+                    resolved_score = f"**{casa} [{local_gc}]** vs **{fora} [{local_gf}]** 🔴 *(Terminado)*"
+                else:
+                    resolved_score = f"**{casa}** vs **{fora}**" if len(partes) == 2 else f"**{nome_jogo}**"
+
+            resolved_games.append({
+                "fase": j_csv["fase"],
+                "grupo": j_csv["grupo"],
+                "hora": resolved_hour,
+                "canal": j_csv["canal"],
+                "is_ko": j_csv.get("is_ko", False),
+                "nome_jogo_formatado": resolved_score,
+                "data": j_csv["data"],
+                "jogo_original": nome_jogo
+            })
             
-            # Formatação premium para eliminatórias ou grupos
-            nome_campo = f"🏆 {j_csv['fase']}" if j_csv['grupo'] == "KO" else f"🥅 Grupo {j_csv['grupo']} — {j_csv['fase']}"
-            
+        # Ordenar os jogos cronologicamente (madrugadas primeiro)
+        resolved_games = sorted(
+            resolved_games,
+            key=lambda x: x["hora"] if x["hora"] and x["hora"].upper() != "TBD" else "99:99"
+        )
+        
+        for g in resolved_games:
+            nome_campo = f"🏆 {g['fase']}" if g['is_ko'] else f"🥅 Grupo {g['grupo']} — {g['fase']}"
             embed.add_field(
                 name=nome_campo,
-                value=f"🕒 **{hora}** | 📺 **{canal}**\n⚔️ {nome_jogo_formatado}",
+                value=f"🕒 **{g['hora']}** | 📺 **{g['canal']}**\n⚔️ {g['nome_jogo_formatado']}",
                 inline=False
             )
             
-            if canal_ou_ctx.guild and hora != "TBD":
+            if canal_ou_ctx.guild and g["hora"] != "TBD":
                 try:
-                    dia, mes, ano = map(int, j_csv["data"].split('/'))
-                    hora_h, hora_m = map(int, hora.split(':'))
+                    dia, mes, ano = map(int, g["data"].split('/'))
+                    hora_h, hora_m = map(int, g["hora"].split(':'))
                     dt_jogo_pt = datetime(ano, mes, dia, hora_h, hora_m, tzinfo=timezone(OFFSET_PT))
                     dt_jogo_utc = dt_jogo_pt.astimezone(timezone.utc)
-                    await criar_evento_discord(canal_ou_ctx.guild, nome_jogo, dt_jogo_utc, f"Mundial 2026 (Grupo {j_csv['grupo']})", canal)
+                    await criar_evento_discord(canal_ou_ctx.guild, g["jogo_original"], dt_jogo_utc, f"Mundial 2026", g["canal"])
                 except: pass
 
     if msg: await msg.edit(content=None, embed=embed)
@@ -613,8 +712,7 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
     if isinstance(canal_ou_ctx, commands.Context):
         msg = await canal_ou_ctx.send(f"🚀 A procurar calendário para **{nome_selecao}**...")
         
-    jogos_csv = carregar_mundial_csv()
-    # Filtra os jogos do CSV onde a seleção joga (Casa ou Fora)
+    jogos_csv = carregar_calendario_hibrido()
     jogos_filtrados = [j for j in jogos_csv if equipa_no_jogo(nome_selecao, j["jogo"])]
     
     if not jogos_filtrados:
@@ -652,12 +750,13 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
         season_id = await obter_season_id(session)
         eventos_api = await obter_resultados_api(session, season_id)
         
-        # CORREÇÃO DO NameError: Alterada a variável de 'juegos_filtrados' para 'jogos_filtrados'
         for j_csv in jogos_filtrados:
             nome_jogo = j_csv["jogo"]
             hora = j_csv["hora"]
             canal = j_csv["canal"]
             data = j_csv["data"]
+            local_gc = j_csv.get("golos_casa")
+            local_gf = j_csv.get("golos_fora")
             
             partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
             status_direto = ""
@@ -673,6 +772,11 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
                         break
                 
                 if match_api:
+                    ts = match_api.get("startTimestamp")
+                    if ts:
+                        dt_pt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(timezone(OFFSET_PT))
+                        hora = dt_pt.strftime("%H:%M")
+                        
                     gc = match_api.get("homeScore", {}).get("current")
                     gf = match_api.get("awayScore", {}).get("current")
                     if gc is not None and gf is not None:
@@ -684,9 +788,15 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
                             status_direto = " 🔴 *(Terminado)*"
                         nome_jogo_formatado = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
                     else:
-                        nome_jogo_formatado = f"**{casa}** vs **{fora}**"
+                        if local_gc is not None and local_gf is not None:
+                            nome_jogo_formatado = f"**{casa} [{local_gc}]** vs **{fora} [{local_gf}]** 🔴 *(Terminado)*"
+                        else:
+                            nome_jogo_formatado = f"**{casa}** vs **{fora}**"
                 else:
-                    nome_jogo_formatado = f"**{casa}** vs **{fora}**"
+                    if local_gc is not None and local_gf is not None:
+                        nome_jogo_formatado = f"**{casa} [{local_gc}]** vs **{fora} [{local_gf}]** 🔴 *(Terminado)*"
+                    else:
+                        nome_jogo_formatado = f"**{casa}** vs **{fora}**"
             else:
                 nome_jogo_formatado = f"**{nome_jogo}**"
             
@@ -694,7 +804,7 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
             
             embed.add_field(
                 name=nome_campo,
-                value=f"📺 Canal: **{canal}**\n⚔️ {nome_jogo_formatado}",
+                value=f"📺 Canal/Estádio: **{canal}**\n⚔️ {nome_jogo_formatado}",
                 inline=False
             )
             
@@ -732,7 +842,6 @@ async def processar_comando_grupo(ctx, letra_grupo):
             e = r.get("draws", 0)
             d = r.get("losses", 0)
             
-            # Correção Cirúrgica: Chaves oficiais da SofaSport para golos marcados e sofridos
             gm = r.get("scoresFor") if r.get("scoresFor") is not None else r.get("goalsFor", 0)
             gs = r.get("scoresAgainst") if r.get("scoresAgainst") is not None else r.get("goalsAgainst", 0)
             dg = gm - gs
@@ -771,6 +880,8 @@ async def processar_comando_grupo(ctx, letra_grupo):
         linhas_jogos = []
         for j_g in jogos_grupo:
             nome_jogo = j_g["jogo"]
+            local_gc = j_g.get("golos_casa")
+            local_gf = j_g.get("golos_fora")
             partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
             status_direto = ""
             
@@ -793,9 +904,15 @@ async def processar_comando_grupo(ctx, letra_grupo):
                             status_direto = " 🔴 *(Terminado)*"
                         jogo_f = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
                     else:
-                        jogo_f = f"**{casa}** vs **{fora}**"
+                        if local_gc is not None and local_gf is not None:
+                            jogo_f = f"**{casa} [{local_gc}]** vs **{fora} [{local_gf}]** 🔴 *(Terminado)*"
+                        else:
+                            jogo_f = f"**{casa}** vs **{fora}**"
                 else:
-                    jogo_f = f"**{casa}** vs **{fora}**"
+                    if local_gc is not None and local_gf is not None:
+                        jogo_f = f"**{casa} [{local_gc}]** vs **{fora} [{local_gf}]** 🔴 *(Terminado)*"
+                    else:
+                        jogo_f = f"**{casa}** vs **{fora}**"
             else:
                 jogo_f = nome_jogo
                 
@@ -816,20 +933,17 @@ def extrair_duas_selecoes(texto):
     """Analisa a string de pesquisa e tenta extrair duas seleções distintas conhecidas em tempo de execução."""
     texto_simp = simplificar_nome_busca(texto)
     
-    # Extrai e simplifica todos os atalhos de seleção registados no dicionário global
     lista_selet_simp = []
     for k in SELECOES_MUNDIAL.keys():
         simp = simplificar_nome_busca(k)
         if simp and simp not in lista_selet_simp:
             lista_selet_simp.append(simp)
             
-    # Ordenar por comprimento decrescente para priorizar nomes compostos (ex: "ivory coast")
     lista_selet_simp = sorted(lista_selet_simp, key=len, reverse=True)
     
     encontradas = []
     for sel_simp in lista_selet_simp:
         if sel_simp in texto_simp:
-            # Evita capturar sub-strings já contidas em algo maior já mapeado
             ja_existe = False
             for enc in encontradas:
                 if sel_simp in enc:
@@ -848,10 +962,9 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
     """Mostra os incidentes detalhados de um jogo dividido por 1ª e 2ª parte em direto (com códigos de seleção)."""
     await ctx.send("🔍 A descarregar detalhes e incidentes da partida na API...")
     
-    # 1. Tentar extração inteligente de duas seleções no texto (ex: "tunisia japao" -> ("tunisia", "japan"))
     selecoes_encontradas = extrair_duas_selecoes(equipas_pesquisa)
     
-    jogos_csv = carregar_mundial_csv()
+    jogos_csv = carregar_calendario_hibrido()
     match_csv = None
     
     if selecoes_encontradas:
@@ -861,7 +974,6 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                 match_csv = j
                 break
     else:
-        # Fallback para o comportamento padrão (pode ser apenas uma seleção ou pesquisa com separador explícito)
         partes = [p.strip() for p in re.split(r'\s+(?:[xX×]|vs\.?|[-–—]|e)\s+', equipas_pesquisa)]
         if len(partes) == 2:
             for j in jogos_csv:
@@ -913,11 +1025,10 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
         
         embed = discord.Embed(
             title=f"⚽ Detalhes do Confronto: {casa} {resultado_f} {fora}",
-            description=f"🏟️ Estado: **{status_desc}** | 📺 Transmissão: **{match_csv['canal']}**",
+            description=f"🏟️ Estado: **{status_desc}** | 📺 Canal/Estádio: **{match_csv['canal']}**",
             color=0x2ecc71
         )
         
-        # Estruturas para as partes do jogo (Cronologia Dividida)
         parte_1 = []
         parte_2 = []
         prolongamento = []
@@ -926,14 +1037,12 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
         cod_fora = obter_codigo_selecao(fora)
         
         for inc in incidents:
-            # Varredura inteligente de chaves (incidentType vs type)
             inc_type = (inc.get("incidentType") or inc.get("type") or "").lower()
             time_val = inc.get('time', 0)
             tempo = f"{time_val}'"
             if inc.get("addedTime"):
                 tempo = f"{time_val}+{inc.get('addedTime')}'"
                 
-            # Identificação estrita da equipa (isHome / home / isHomeTeam)
             is_home = inc.get("isHome")
             if is_home is None:
                 is_home = inc.get("home")
@@ -943,7 +1052,6 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
             cod_equipa = cod_casa if is_home else cod_fora
             emoji_equipa = "🟢" if is_home else "🔵"
             
-            # Parsing robusto do jogador envolvido
             p_obj = inc.get("player")
             if isinstance(p_obj, dict):
                 player_name = p_obj.get("name") or p_obj.get("shortName") or "Jogador"
@@ -965,7 +1073,6 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                     emoji = "❌"
                     detalhe = "Auto-Golo"
                     
-                # Parsing robusto do jogador da assistência
                 assist_obj = inc.get("assist")
                 assist_name = None
                 if isinstance(assist_obj, dict):
@@ -1007,7 +1114,6 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                     
                 evento_linha = f"{emoji_equipa} **[{cod_equipa}]** `{tempo:<5}` 🔄 *{player_out}* ➡️ *{player_in}*"
             
-            # Distribuir os eventos pelas respetivas metades cronológicas
             if evento_linha:
                 if time_val <= 45:
                     parte_1.append(evento_linha)
@@ -1016,7 +1122,6 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                 else:
                     prolongamento.append(evento_linha)
         
-        # Função auxiliar estrita de formatação de limite seguro de 1024 caracteres
         def formatar_parte(lista_eventos):
             if not lista_eventos:
                 return "🏟️ *Sem incidentes registados nesta parte.*"
@@ -1031,7 +1136,6 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                     texto = item
             return texto
             
-        # Adicionar as metades separadas cronologicamente ao Embed
         embed.add_field(name="⏱️ 1ª PARTE", value=formatar_parte(parte_1), inline=False)
         embed.add_field(name="⏱️ 2ª PARTE", value=formatar_parte(parte_2), inline=False)
         if prolongamento:
@@ -1043,73 +1147,69 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
 
 @bot.command(aliases=['faseeliminar', 'eliminatorias', 'esquema', 'fases'])
 async def bracket(ctx, *, fase_filtro: str = None):
-    """Mostra os confrontos da fase a eliminar (bracket) sincronizados com os golos da API."""
+    """Mostra os confrontos da fase a eliminar (bracket) sincronizados com os golos da API ou locais do CSV."""
     await ctx.send("🔍 A carregar a árvore das eliminatórias...")
     
-    jogos_csv = carregar_mundial_csv()
-    jogos_ko = [j for j in jogos_csv if j["grupo"] == "KO"]
+    jogos_ko = carregar_eliminatorias_csv()
     
     if not jogos_ko:
-        return await ctx.send("ℹ️ Não foram encontrados jogos da fase a eliminar no calendário `mundial.csv` de momento.")
+        return await ctx.send("ℹ️ Não foram encontrados jogos da fase a eliminar no calendário `mundial_fase_eliminatoria.csv` de momento.")
         
-    # Agrupar por fase normalizada
     categorias = {
-        "Dezasseis-avos-de-final (R32)": [],
-        "Oitavos-de-final (R16)": [],
-        "Quartos-de-final (QF)": [],
-        "Meias-finais (SF)": [],
-        "Grande Final": []
+        "32 avos de final": [],
+        "Oitavos de final": [],
+        "Quartos de final": [],
+        "Meias-finais": [],
+        "Final": []
     }
     
     for j in jogos_ko:
-        cat = normalizar_fase_ko(j["fase"])
-        if cat in categorias:
-            categorias[cat].append(j)
+        cat = j["fase"].strip()
+        # Mapeamento e correspondência para agrupamento flexível no embed
+        cat_normalizada = "32 avos de final"
+        if "32" in cat.lower() or "1/16" in cat.lower():
+            cat_normalizada = "32 avos de final"
+        elif "oitav" in cat.lower() or "1/8" in cat.lower() or "16" in cat.lower():
+            cat_normalizada = "Oitavos de final"
+        elif "quart" in cat.lower() or "1/4" in cat.lower() or "qf" in cat.lower():
+            cat_normalizada = "Quartos de final"
+        elif "meia" in cat.lower() or "1/2" in cat.lower() or "sf" in cat.lower():
+            cat_normalizada = "Meias-finais"
+        elif "final" in cat.lower() or "3º" in cat.lower():
+            cat_normalizada = "Final"
+            
+        if cat_normalizada in categorias:
+            categorias[cat_normalizada].append(j)
             
     # Determinar qual a fase a mostrar
     fase_alvo = None
     if fase_filtro:
         fase_filtro_simp = simplificar_nome_busca(fase_filtro)
-        if any(x in fase_filtro_simp for x in ["32", "1/16", "dezasseis"]):
-            fase_alvo = "Dezasseis-avos-de-final (R32)"
+        if any(x in fase_filtro_simp for x in ["32", "1/16", "trinta"]):
+            fase_alvo = "32 avos de final"
         elif any(x in fase_filtro_simp for x in ["16", "1/8", "oitav"]):
-            fase_alvo = "Oitavos-de-final (R16)"
+            fase_alvo = "Oitavos de final"
         elif any(x in fase_filtro_simp for x in ["8", "1/4", "quart"]):
-            fase_alvo = "Quartos-de-final (QF)"
+            fase_alvo = "Quartos de final"
         elif any(x in fase_filtro_simp for x in ["4", "1/2", "meia"]):
-            fase_alvo = "Meias-finais (SF)"
+            fase_alvo = "Meias-finais"
         elif any(x in fase_filtro_simp for x in ["final", "f", "decis"]):
-            fase_alvo = "Grande Final"
+            fase_alvo = "Final"
         else:
-            return await ctx.send("❌ Fase inválida. Escolhe entre: `R32`, `Oitavos`, `Quartos`, `Meias` ou `Final`.")
+            return await ctx.send("❌ Fase inválida. Escolhe entre: `32`, `Oitavos`, `Quartos`, `Meias` ou `Final`.")
     else:
-        # Seleção automática da primeira fase que tenha jogos por realizar ou em direto
+        # Por defeito escolhemos a primeira fase que tenha jogos por realizar ou em direto
         for cat, lista in categorias.items():
             if lista:
                 fase_alvo = cat
                 break
         if not fase_alvo:
-            fase_alvo = "Dezasseis-avos-de-final (R32)"
+            fase_alvo = "32 avos de final"
             
     jogos_fase = categorias.get(fase_alvo, [])
     if not jogos_fase:
         return await ctx.send(f"📅 Sem jogos agendados para a fase **{fase_alvo}** de momento.")
         
-    # Ordenar cronologicamente
-    def parse_datetime(j):
-        try:
-            dia, mes, ano = map(int, j["data"].split('/'))
-            hora_str = j["hora"]
-            if not hora_str or hora_str.upper() == "TBD":
-                hora_h, hora_m = 23, 59
-            else:
-                hora_h, hora_m = map(int, hora_str.split(':'))
-            return datetime(ano, mes, dia, hora_h, hora_m)
-        except:
-            return datetime(9999, 12, 31, 23, 59)
-
-    jogos_fase = sorted(jogos_fase, key=parse_datetime)
-    
     embed = discord.Embed(
         title=f"🏆 Árvore do Mundial — {fase_alvo.upper()}",
         description="Acompanha o caminho rumo ao topo do mundo! 🌟",
@@ -1123,8 +1223,11 @@ async def bracket(ctx, *, fase_filtro: str = None):
         linhas_jogos = []
         for j_csv in jogos_fase:
             nome_jogo = j_csv["jogo"]
+            local_gc = j_csv.get("golos_casa")
+            local_gf = j_csv.get("golos_fora")
             partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
             status_direto = ""
+            hora_jogo = j_csv["hora"] if j_csv["hora"] else "TBD"
             
             if len(partes) == 2:
                 casa, fora = traduzir_nome_equipa(partes[0]), traduzir_nome_equipa(partes[1])
@@ -1137,6 +1240,11 @@ async def bracket(ctx, *, fase_filtro: str = None):
                         break
                 
                 if match_api:
+                    ts = match_api.get("startTimestamp")
+                    if ts:
+                        dt_pt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(timezone(OFFSET_PT))
+                        hora_jogo = dt_pt.strftime("%H:%M")
+                        
                     gc = match_api.get("homeScore", {}).get("current")
                     gf = match_api.get("awayScore", {}).get("current")
                     if gc is not None and gf is not None:
@@ -1148,15 +1256,20 @@ async def bracket(ctx, *, fase_filtro: str = None):
                             status_direto = " 🔴 *(Terminado)*"
                         jogo_f = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
                     else:
-                        jogo_f = f"**{casa}** vs **{fora}**"
+                        if local_gc is not None and local_gf is not None:
+                            jogo_f = f"**{casa} [{local_gc}]** vs **{fora} [{local_gf}]** 🔴 *(Terminado)*"
+                        else:
+                            jogo_f = f"**{casa}** vs **{fora}**"
                 else:
-                    jogo_f = f"**{casa}** vs **{fora}**"
+                    if local_gc is not None and local_gf is not None:
+                        jogo_f = f"**{casa} [{local_gc}]** vs **{fora} [{local_gf}]** 🔴 *(Terminado)*"
+                    else:
+                        jogo_f = f"**{casa}** vs **{fora}**"
             else:
                 jogo_f = f"**{nome_jogo}**"
                 
-            linhas_jogos.append(f"📅 **{j_csv['data']} @ {j_csv['hora']}** | 📺 **{j_csv['canal']}**\n⚔️ {jogo_f}\n")
+            linhas_jogos.append(f"📌 **{j_csv['num_jogo']}** ({j_csv['data']} @ {hora_jogo})\n🏟️ {j_csv['canal']}\n⚔️ {jogo_f}\n")
             
-        # Dividir em blocos de até 8 confrontos para respeitar os limites de embeds do Discord
         chunk_size = 8
         for i in range(0, len(linhas_jogos), chunk_size):
             chunk = linhas_jogos[i:i+chunk_size]
