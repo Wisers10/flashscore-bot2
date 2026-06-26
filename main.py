@@ -20,7 +20,7 @@ ID_CANAL_VOZ_STR = os.getenv('ID_CANAL_VOZ', '813485447719813207')
 # Fuso horário de Portugal (Ajuste manual de +1h sobre o UTC)
 OFFSET_PT = timedelta(hours=1)
 
-CACHE_EXPIRY = 300 # Cache rápido de 5 minutes para os resultados em direto da API
+CACHE_EXPIRY = 300 # Cache rápido de 5 minutos para os resultados em direto da API
 cache_jogos = {}
 
 # Dados de salvaguarda (Caso o mundial.csv ainda não esteja na pasta)
@@ -59,7 +59,7 @@ SELECOES_MUNDIAL = {
     "costa_do_marfim": "Costa do Marfim", "rd_congo": "RD Congo", "rdcongo": "RD Congo", "dr_congo": "RD Congo",
     "uzbequistao": "Uzbequistão", "uzbequistão": "Uzbequistão",
     "iraque": "Iraque", "eslovaquia": "Eslováquia", "eslovaquia": "Eslováquia",
-    "eslovenia": "Eslovénia", "eslovénia": "Eslovénia", "romenia": "Roménia", "roménia": "Roménia"
+    "eslovenia": "Eslovénia", "eslovenia": "Eslovénia", "romenia": "Roménia", "roménia": "Roménia"
 }
 
 if not DISCORD_TOKEN:
@@ -81,7 +81,7 @@ HEADERS_API = {
 # ================= CARREGAMENTO DO CSV DO EXCEL =================
 
 def carregar_mundial_csv():
-    """Lê o mundial.csv preservando índices vazios de forma estrita"""
+    """Lê o mundial.csv preservando índices vazios de forma estrita, suportando fase de grupos e eliminatórias"""
     caminho_csv = "mundial.csv"
     if not os.path.exists(caminho_csv):
         print("ℹ️ [SISTEMA] 'mundial.csv' não encontrado. A usar dados padrão de teste (Grupo A).")
@@ -111,8 +111,12 @@ def carregar_mundial_csv():
                 # Garante que a linha tem sempre pelo menos 9 colunas para evitar desalinhamento nas leituras
                 row = row + [""] * (9 - len(row))
                 
+                fase_str = row[0] if row[0] else ""
+                fase_simp = simplificar_nome_busca(fase_str)
+                is_knockout = any(f in fase_simp for f in ["r32", "r16", "qf", "sf", "1/16", "1/8", "1/4", "1/2", "oitav", "quart", "meia", "final"])
+                
                 # Garante que a linha tem os campos mínimos e uma data válida na coluna 1
-                if current_group and len(row) >= 5:
+                if (current_group or is_knockout) and len(row) >= 5:
                     data_str = row[1]
                     if re.match(r'\d{1,2}[/\-]\d{1,2}[/\-]\d{4}', data_str):
                         jogo_str = row[4]
@@ -120,8 +124,8 @@ def carregar_mundial_csv():
                         canal_str = row[8] if row[8] else "Por definir"
                         
                         jogos.append({
-                            "grupo": current_group,
-                            "fase": row[0] if row[0] else "",
+                            "grupo": "KO" if is_knockout else current_group,
+                            "fase": fase_str,
                             "data": data_str,
                             "dia": row[2] if row[2] else "",
                             "hora": row[3] if row[3] else "",
@@ -227,42 +231,42 @@ def traduzir_nome_equipa(nome):
     return nome
 
 def simplificar_nome_busca(nome):
-    """Prepara o nome para comparação interna de strings (Fuzzy match)"""
+    """Prepara o nome para comparação interna de strings com mapeamento unificado (Fuzzy match)"""
     nome = ''.join(c for c in unicodedata.normalize('NFD', nome) if unicodedata.category(c) != 'Mn')
     nome = nome.lower()
     traducoes_busca = {
         "republica checa": "czechia", "chequia": "czechia", "czech republic": "czechia",
-        "coreia do sul": "south korea", "korea republic": "south korea",
-        "alemanha": "germany", "espanha": "spain", "franca": "france",
-        "belgica": "belgium", "inglaterra": "england", "suica": "switzerland",
-        "suecia": "sweden", "marrocos": "morocco", "camaroes": "cameroon",
-        "croacia": "croatia", "brasil": "brazil", "estados unidos": "usa",
-        "united states": "usa", "eua": "usa", "arabia saudita": "saudi arabia", "africa do sul": "south africa",
-        "bosnia e herzegovina": "bosnia", "bosnia and herzegovina": "bosnia", "bosnia & herzegovina": "bosnia",
+        "coreia": "south korea", "coreia do sul": "south korea", "coreia_do_sul": "south korea", "korea republic": "south korea",
+        "alemanha": "germany", "espanha": "spain", "franca": "france", "frança": "france",
+        "belgica": "belgium", "bélgica": "belgium", "inglaterra": "england", "suica": "switzerland", "suíça": "switzerland",
+        "suecia": "sweden", "suécia": "sweden", "marrocos": "morocco", "camaroes": "cameroon", "camarões": "cameroon",
+        "croacia": "croatia", "croácia": "croatia", "brasil": "brazil", "estados unidos": "usa",
+        "united states": "usa", "eua": "usa", "arabia": "saudi arabia", "arabia saudita": "saudi arabia", "arábia_saudita": "saudi arabia", "africa do sul": "south africa", "áfrica do sul": "south africa",
+        "bosnia": "bosnia", "bosnia e herzegovina": "bosnia", "bosnia and herzegovina": "bosnia", "bosnia & herzegovina": "bosnia",
         "bosnia & h.": "bosnia", "bosnia & h": "bosnia", "bosnia and h": "bosnia", "bosnia and h.": "bosnia",
-        "holanda": "netherlands", "paises baixos": "netherlands",
-        "catar": "qatar", "irao": "iran", "japao": "japan", "polonia": "poland",
-        "turquia": "turkey", "turkiye": "turkey", "austria": "austria", "ucrania": "ukraine", "italia": "italy",
-        "escocia": "scotland",
+        "holanda": "netherlands", "paises baixos": "netherlands", "países baixos": "netherlands",
+        "catar": "qatar", "irao": "iran", "irão": "iran", "japao": "japan", "japão": "japan", "polonia": "poland", "polónia": "poland",
+        "turquia": "turkey", "turkiye": "turkey", "austria": "austria", "áustria": "austria", "ucrania": "ukraine", "ucrânia": "ukraine", "italia": "italy", "itália": "italy",
+        "escocia": "scotland", "escócia": "scotland",
         "paraguai": "paraguay",
-        "curacau": "curacao",
+        "curacau": "curacao", "curaçau": "curacao",
         "costa do marfim": "ivory coast", "cote divoire": "ivory coast", "cote d'ivoire": "ivory coast",
         "egito": "egypt",
-        "nova zelandia": "new zealand",
+        "nova zelandia": "new zealand", "nova zelândia": "new zealand",
         "uruguai": "uruguay",
         "rd congo": "dr congo", "democratic republic of the congo": "dr congo", "republica democratica do congo": "dr congo",
         "equador": "ecuador",
-        "colombia": "colombia",
-        "panama": "panama",
-        "argelia": "algeria",
-        "tunisia": "tunisia",
+        "colombia": "colombia", "colômbia": "colombia",
+        "panama": "panama", "panamá": "panama",
+        "argelia": "algeria", "argélia": "algeria",
+        "tunisia": "tunisia", "tunísia": "tunisia",
         "dinamarca": "denmark",
         "gana": "ghana",
-        "uzbequistao": "uzbekistan",
+        "uzbequistao": "uzbekistan", "uzbequistão": "uzbekistan",
         "iraque": "iraq",
-        "eslovaquia": "slovakia",
-        "eslovenia": "slovenia",
-        "romenia": "romania"
+        "eslovaquia": "slovakia", "eslováquia": "slovakia",
+        "eslovenia": "slovenia", "eslovénia": "slovenia",
+        "romenia": "romania", "roménia": "romania"
     }
     for k, v in traducoes_busca.items():
         nome = nome.replace(k, v)
@@ -289,7 +293,7 @@ def equipas_correspondem(csv_casa, csv_fora, api_casa, api_fora):
     return match_inv_casa and match_inv_fora
 
 def equipa_no_jogo(nome_selecao, jogo_csv):
-    """Verifica se a seleção pesquisada faz parte do confronto estipulado no CSV com regex de espaçamento estrito"""
+    """Verifica se a seleção pesquisada faz parte do confronto estipulado no CSV com correspondência estrita."""
     partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', jogo_csv)]
     if len(partes) != 2:
         return False
@@ -298,7 +302,22 @@ def equipa_no_jogo(nome_selecao, jogo_csv):
     s_casa = simplificar_nome_busca(partes[0])
     s_fora = simplificar_nome_busca(partes[1])
     
-    return s_selecao in s_casa or s_casa in s_selecao or s_selecao in s_fora or s_fora in s_selecao
+    return s_selecao in s_casa or s_selecao in s_fora
+
+def normalizar_fase_ko(fase):
+    """Normaliza o nome da fase a eliminar para uma categoria estandardizada."""
+    f = simplificar_nome_busca(fase)
+    if "r32" in f or "1/16" in f or "32" in f or "dezasseis" in f:
+        return "Dezasseis-avos-de-final (R32)"
+    if "r16" in f or "1/8" in f or "16" in f or "oitav" in f:
+        return "Oitavos-de-final (R16)"
+    if "qf" in f or "1/4" in f or "quart" in f or "8" in f:
+        return "Quartos-de-final (QF)"
+    if "sf" in f or "1/2" in f or "meia" in f or "4" in f:
+        return "Meias-finais (SF)"
+    if "final" in f or "f" == f or "2" in f:
+        return "Grande Final"
+    return "Dezasseis-avos-de-final (R32)"
 
 # ================= INTEGRAÇÃO COM A API SOFASPORT =================
 
@@ -565,8 +584,11 @@ async def gerar_agenda_data(canal_ou_ctx, data_alvo_pt, titulo):
             else:
                 nome_jogo_formatado = f"**{nome_jogo}**"
             
+            # Formatação premium para eliminatórias ou grupos
+            nome_campo = f"🏆 {j_csv['fase']}" if j_csv['grupo'] == "KO" else f"🥅 Grupo {j_csv['grupo']} — {j_csv['fase']}"
+            
             embed.add_field(
-                name=f"🥅 Grupo {j_csv['grupo']} — {j_csv['fase']}",
+                name=nome_campo,
                 value=f"🕒 **{hora}** | 📺 **{canal}**\n⚔️ {nome_jogo_formatado}",
                 inline=False
             )
@@ -668,8 +690,10 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
             else:
                 nome_jogo_formatado = f"**{nome_jogo}**"
             
+            nome_campo = f"📅 {data} @ {hora} ({j_csv['fase']})" if j_csv['grupo'] == "KO" else f"📅 {data} @ {hora} (Grupo {j_csv['grupo']})"
+            
             embed.add_field(
-                name=f"📅 {data} @ {hora} (Grupo {j_csv['grupo']})",
+                name=nome_campo,
                 value=f"📺 Canal: **{canal}**\n⚔️ {nome_jogo_formatado}",
                 inline=False
             )
@@ -788,29 +812,67 @@ def obter_codigo_selecao(nome):
     nome_clean = re.sub(r'[^a-zA-Z]', '', nome_clean)
     return nome_clean[:3].upper()
 
+def extrair_duas_selecoes(texto):
+    """Analisa a string de pesquisa e tenta extrair duas seleções distintas conhecidas em tempo de execução."""
+    texto_simp = simplificar_nome_busca(texto)
+    
+    # Extrai e simplifica todos os atalhos de seleção registados no dicionário global
+    lista_selet_simp = []
+    for k in SELECOES_MUNDIAL.keys():
+        simp = simplificar_nome_busca(k)
+        if simp and simp not in lista_selet_simp:
+            lista_selet_simp.append(simp)
+            
+    # Ordenar por comprimento decrescente para priorizar nomes compostos (ex: "ivory coast")
+    lista_selet_simp = sorted(lista_selet_simp, key=len, reverse=True)
+    
+    encontradas = []
+    for sel_simp in lista_selet_simp:
+        if sel_simp in texto_simp:
+            # Evita capturar sub-strings já contidas em algo maior já mapeado
+            ja_existe = False
+            for enc in encontradas:
+                if sel_simp in enc:
+                    ja_existe = True
+                    break
+            if not ja_existe:
+                encontradas.append(sel_simp)
+                texto_simp = texto_simp.replace(sel_simp, "", 1)
+                
+    if len(encontradas) >= 2:
+        return encontradas[0], encontradas[1]
+    return None
+
 @bot.command(aliases=['jogo', 'info', 'eventos'])
 async def detalhes(ctx, *, equipas_pesquisa: str):
     """Mostra os incidentes detalhados de um jogo dividido por 1ª e 2ª parte em direto (com códigos de seleção)."""
     await ctx.send("🔍 A descarregar detalhes e incidentes da partida na API...")
     
-    # Separar os argumentos de pesquisa (ex: "mexico x africa" ou apenas "portugal")
-    partes = [p.strip() for p in re.split(r'\s+(?:[xX×]|vs\.?|[-–—]|e)\s+', equipas_pesquisa)]
+    # 1. Tentar extração inteligente de duas seleções no texto (ex: "tunisia japao" -> ("tunisia", "japan"))
+    selecoes_encontradas = extrair_duas_selecoes(equipas_pesquisa)
     
     jogos_csv = carregar_mundial_csv()
     match_csv = None
     
-    if len(partes) == 2:
-        # Pesquisa por confronto direto entre dois países
+    if selecoes_encontradas:
+        sel1, sel2 = selecoes_encontradas
         for j in jogos_csv:
-            if equipa_no_jogo(partes[0], j["jogo"]) and equipa_no_jogo(partes[1], j["jogo"]):
+            if equipa_no_jogo(sel1, j["jogo"]) and equipa_no_jogo(sel2, j["jogo"]):
                 match_csv = j
                 break
-    elif len(partes) == 1:
-        # Pesquisa genérica pelo último jogo registado do país
-        for j in jogos_csv:
-            if equipa_no_jogo(partes[0], j["jogo"]):
-                match_csv = j
-                break
+    else:
+        # Fallback para o comportamento padrão (pode ser apenas uma seleção ou pesquisa com separador explícito)
+        partes = [p.strip() for p in re.split(r'\s+(?:[xX×]|vs\.?|[-–—]|e)\s+', equipas_pesquisa)]
+        if len(partes) == 2:
+            for j in jogos_csv:
+                if equipa_no_jogo(partes[0], j["jogo"]) and equipa_no_jogo(partes[1], j["jogo"]):
+                    match_csv = j
+                    break
+        elif len(partes) == 1:
+            for j in jogos_csv:
+                if equipa_no_jogo(partes[0], j["jogo"]):
+                    match_csv = j
+                    break
                 
     if not match_csv:
         return await ctx.send("❌ Não encontrei nenhuma partida agendada para essa pesquisa no calendário do Mundial.")
@@ -977,6 +1039,133 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
             
         await ctx.send(embed=embed)
 
+# ================= COMANDO DE BRACKET DA FASE A ELIMINAR =================
+
+@bot.command(aliases=['faseeliminar', 'eliminatorias', 'esquema', 'fases'])
+async def bracket(ctx, *, fase_filtro: str = None):
+    """Mostra os confrontos da fase a eliminar (bracket) sincronizados com os golos da API."""
+    await ctx.send("🔍 A carregar a árvore das eliminatórias...")
+    
+    jogos_csv = carregar_mundial_csv()
+    jogos_ko = [j for j in jogos_csv if j["grupo"] == "KO"]
+    
+    if not jogos_ko:
+        return await ctx.send("ℹ️ Não foram encontrados jogos da fase a eliminar no calendário `mundial.csv` de momento.")
+        
+    # Agrupar por fase normalizada
+    categorias = {
+        "Dezasseis-avos-de-final (R32)": [],
+        "Oitavos-de-final (R16)": [],
+        "Quartos-de-final (QF)": [],
+        "Meias-finais (SF)": [],
+        "Grande Final": []
+    }
+    
+    for j in jogos_ko:
+        cat = normalizar_fase_ko(j["fase"])
+        if cat in categorias:
+            categorias[cat].append(j)
+            
+    # Determinar qual a fase a mostrar
+    fase_alvo = None
+    if fase_filtro:
+        fase_filtro_simp = simplificar_nome_busca(fase_filtro)
+        if any(x in fase_filtro_simp for x in ["32", "1/16", "dezasseis"]):
+            fase_alvo = "Dezasseis-avos-de-final (R32)"
+        elif any(x in fase_filtro_simp for x in ["16", "1/8", "oitav"]):
+            fase_alvo = "Oitavos-de-final (R16)"
+        elif any(x in fase_filtro_simp for x in ["8", "1/4", "quart"]):
+            fase_alvo = "Quartos-de-final (QF)"
+        elif any(x in fase_filtro_simp for x in ["4", "1/2", "meia"]):
+            fase_alvo = "Meias-finais (SF)"
+        elif any(x in fase_filtro_simp for x in ["final", "f", "decis"]):
+            fase_alvo = "Grande Final"
+        else:
+            return await ctx.send("❌ Fase inválida. Escolhe entre: `R32`, `Oitavos`, `Quartos`, `Meias` ou `Final`.")
+    else:
+        # Seleção automática da primeira fase que tenha jogos por realizar ou em direto
+        for cat, lista in categorias.items():
+            if lista:
+                fase_alvo = cat
+                break
+        if not fase_alvo:
+            fase_alvo = "Dezasseis-avos-de-final (R32)"
+            
+    jogos_fase = categorias.get(fase_alvo, [])
+    if not jogos_fase:
+        return await ctx.send(f"📅 Sem jogos agendados para a fase **{fase_alvo}** de momento.")
+        
+    # Ordenar cronologicamente
+    def parse_datetime(j):
+        try:
+            dia, mes, ano = map(int, j["data"].split('/'))
+            hora_str = j["hora"]
+            if not hora_str or hora_str.upper() == "TBD":
+                hora_h, hora_m = 23, 59
+            else:
+                hora_h, hora_m = map(int, hora_str.split(':'))
+            return datetime(ano, mes, dia, hora_h, hora_m)
+        except:
+            return datetime(9999, 12, 31, 23, 59)
+
+    jogos_fase = sorted(jogos_fase, key=parse_datetime)
+    
+    embed = discord.Embed(
+        title=f"🏆 Árvore do Mundial — {fase_alvo.upper()}",
+        description="Acompanha o caminho rumo ao topo do mundo! 🌟",
+        color=0xe74c3c
+    )
+    
+    async with aiohttp.ClientSession() as session:
+        season_id = await obter_season_id(session)
+        eventos_api = await obter_resultados_api(session, season_id)
+        
+        linhas_jogos = []
+        for j_csv in jogos_fase:
+            nome_jogo = j_csv["jogo"]
+            partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
+            status_direto = ""
+            
+            if len(partes) == 2:
+                casa, fora = traduzir_nome_equipa(partes[0]), traduzir_nome_equipa(partes[1])
+                match_api = None
+                for ev in eventos_api:
+                    api_casa = ev.get("homeTeam", {}).get("name", "")
+                    api_fora = ev.get("awayTeam", {}).get("name", "")
+                    if equipas_correspondem(casa, fora, api_casa, api_fora):
+                        match_api = ev
+                        break
+                
+                if match_api:
+                    gc = match_api.get("homeScore", {}).get("current")
+                    gf = match_api.get("awayScore", {}).get("current")
+                    if gc is not None and gf is not None:
+                        status_type = match_api.get("status", {}).get("type", "")
+                        status_desc = match_api.get("status", {}).get("description", "")
+                        if status_type == "inprogress":
+                            status_direto = f" 🟢 *({status_desc})*"
+                        elif status_type == "finished":
+                            status_direto = " 🔴 *(Terminado)*"
+                        jogo_f = f"**{casa} [{gc}]** vs **{fora} [{gf}]**{status_direto}"
+                    else:
+                        jogo_f = f"**{casa}** vs **{fora}**"
+                else:
+                    jogo_f = f"**{casa}** vs **{fora}**"
+            else:
+                jogo_f = f"**{nome_jogo}**"
+                
+            linhas_jogos.append(f"📅 **{j_csv['data']} @ {j_csv['hora']}** | 📺 **{j_csv['canal']}**\n⚔️ {jogo_f}\n")
+            
+        # Dividir em blocos de até 8 confrontos para respeitar os limites de embeds do Discord
+        chunk_size = 8
+        for i in range(0, len(linhas_jogos), chunk_size):
+            chunk = linhas_jogos[i:i+chunk_size]
+            field_title = "⚽ Confrontos" if i == 0 else f"⚽ Confrontos (Continuação)"
+            embed.add_field(name=field_title, value="".join(chunk), inline=False)
+            
+    embed.set_footer(text="💡 Usa !bracket <fase> (ex: oitavos, quartos, meias, final) para veres outras fases!")
+    await ctx.send(embed=embed)
+
 # ================= TAREFA AUTOMÁTICA DIÁRIA (MEIA NOITE PORTUGAL) =================
 
 @tasks.loop(time=time(hour=23, minute=0, tzinfo=timezone.utc)) # 23:00 UTC = 00:00 (Meia-Noite) em Portugal (UTC+1)
@@ -1086,6 +1275,7 @@ async def comandos(ctx):
     embed.add_field(name="⏰ Agendas Diárias", value="`!hoje`, `!amanha` (Agenda híbrida de canais e resultados em direto)", inline=False)
     embed.add_field(name="📅 Pesquisa de Data", value="`!mundial DD/MM/AAAA` (Ex: `!mundial 11/06/2026`)", inline=False)
     embed.add_field(name="📊 Grupos & Classificações", value="`!grupo A` ou comandos rápidos: `!grupoa` ... `!grupol` (Tabela ultra-compacta para telemóveis)", inline=False)
+    embed.add_field(name="🌳 Fase a Eliminar", value="`!bracket <fase>` ou `!bracket` (Mostra os emparelhamentos dos oitavos, quartos, etc. em tempo real)", inline=False)
     embed.add_field(name="⚽ Detalhes do Jogo (Cronologia)", value="`!detalhes <seleção1> <seleção2>` ou `!detalhes <seleção>` (Ex: `!detalhes portugal` ou `!detalhes mexico x africa`)", inline=False)
     embed.add_field(name="⚽ Seleções Nacionais", value="Comandos diretos para TODAS as seleções do Mundial (Ex: `!portugal`, `!brasil`, `!argentina`, `!alemanha`, `!marrocos`, etc.) ou pesquisa genérica: `!selecao <nome>`", inline=False)
     await ctx.send(embed=embed)
