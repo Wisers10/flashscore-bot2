@@ -116,7 +116,11 @@ def carregar_eliminatorias_csv():
             reader = csv.reader(f)
             for row in reader:
                 row = [cell.strip() for cell in row]
-                if not any(row) or len(row) < 6: continue
+                if not any(row): continue
+                
+                # Garantia absoluta: blinda o bot expandindo qualquer linha para no mínimo 10 colunas
+                row = row + [""] * (10 - len(row))
+                
                 fase, num_jogo, data_str = row[0], row[1], row[2]
                 if not re.match(r'\d{1,2}[/\-]\d{1,2}[/\-]\d{4}', data_str):
                     continue
