@@ -59,7 +59,8 @@ SELECOES_MUNDIAL = {
     "costa_do_marfim": "Costa do Marfim", "rd_congo": "RD Congo", "rdcongo": "RD Congo", "dr_congo": "RD Congo",
     "uzbequistao": "Uzbequistão", "uzbequistão": "Uzbequistão",
     "iraque": "Iraque", "eslovaquia": "Eslováquia", "eslovaquia": "Eslováquia",
-    "eslovenia": "Eslovénia", "eslovenia": "Eslovénia", "romenia": "Roménia", "roménia": "Roménia"
+    "eslovenia": "Eslovénia", "eslovenia": "Eslovénia", "romenia": "Roménia", "roménia": "Roménia",
+    "noruega": "Noruega", "cabo_verde": "Cabo Verde"
 }
 
 if not DISCORD_TOKEN:
@@ -145,7 +146,7 @@ def carregar_mundial_csv():
         return MUNDIAL_DEMO
 
 def carregar_eliminatorias_csv():
-    """Lê o mundial_fase_eliminatoria.csv de forma robusta e mapeia os seus jogos."""
+    """Lê o mundial_fase_eliminatoria.csv contendo a coluna 'Hora (PT)' e ignora cabeçalhos."""
     caminho_csv = "mundial_fase_eliminatoria.csv"
     if not os.path.exists(caminho_csv):
         print("ℹ️ [SISTEMA] 'mundial_fase_eliminatoria.csv' não encontrado.")
@@ -158,45 +159,46 @@ def carregar_eliminatorias_csv():
             for row in reader:
                 row = [cell.strip() for cell in row]
                 if not any(row): continue
-                if "FASE ELIMINATÓRIA" in row[0] or "Fase,Nº Jogo" in "".join(row) or "Nº Jogo" in row[0] or "Calendário" in row[0]:
+                if len(row) < 6: continue
+                
+                fase = row[0]
+                num_jogo = row[1]
+                data_str = row[2]
+                
+                # Validação estrita de data para ignorar cabeçalhos
+                if not re.match(r'\d{1,2}[/\-]\d{1,2}[/\-]\d{4}', data_str):
                     continue
-                
-                # Garante dimensão mínima de colunas
-                row = row + [""] * (9 - len(row))
-                
-                if len(row) >= 5:
-                    fase = row[0]
-                    num_jogo = row[1]
-                    data_str = row[2]
-                    dia = row[3]
-                    jogo_str = row[4]
                     
-                    # Extração de golos locais do CSV de eliminatórias
-                    golos_casa = None
-                    golos_fora = None
-                    try:
-                        if row[5] != "" and row[5].isdigit():
-                            golos_casa = int(row[5])
-                        if row[7] != "" and row[7].isdigit():
-                            golos_fora = int(row[7])
-                    except:
-                        pass
-                        
-                    estadio_canal = row[8] if row[8] else "A definir"
+                dia = row[3]
+                hora = row[4] if row[4] else "TBD"
+                jogo_str = row[5]
+                
+                # Extração de golos locais do CSV de eliminatórias (Índices: 6 e 8)
+                golos_casa = None
+                golos_fora = None
+                try:
+                    if row[6] != "" and row[6].isdigit():
+                        golos_casa = int(row[6])
+                    if row[8] != "" and row[8].isdigit():
+                        golos_fora = int(row[8])
+                except:
+                    pass
                     
-                    jogos.append({
-                        "grupo": "KO",
-                        "fase": fase,
-                        "num_jogo": num_jogo,
-                        "data": data_str,
-                        "dia": dia,
-                        "hora": "TBD", # Hora será preenchida dinamicamente pela API se sincronizada
-                        "jogo": jogo_str,
-                        "golos_casa": golos_casa,
-                        "golos_fora": golos_fora,
-                        "canal": estadio_canal,
-                        "is_ko": True
-                    })
+                estadio_canal = row[9] if row[9] else "A definir"
+                
+                jogos.append({
+                    "grupo": "KO",
+                    "fase": fase,
+                    "num_jogo": num_jogo,
+                    "data": data_str,
+                    "dia": dia,
+                    "hora": hora,
+                    "jogo": jogo_str,
+                    "golos_casa": golos_casa,
+                    "golos_fora": golos_fora,
+                    "canal": estadio_canal,
+                    "is_ko": True
+                })
         return jogos
     except Exception as e:
         print(f"❌ [SISTEMA] Erro ao carregar mundial_fase_eliminatoria.csv: {e}")
@@ -307,7 +309,9 @@ def traduzir_nome_equipa(nome):
         "Iraq": "Iraque",
         "Slovakia": "Eslováquia",
         "Slovenia": "Eslovénia",
-        "Romania": "Roménia"
+        "Romania": "Roménia",
+        "Norway": "Noruega",
+        "Cape Verde": "Cabo Verde"
     }
     for k, v in traducoes.items():
         if k.lower() == nome.lower():
@@ -350,7 +354,8 @@ def simplificar_nome_busca(nome):
         "iraque": "iraq",
         "eslovaquia": "slovakia", "eslováquia": "slovakia",
         "eslovenia": "slovenia", "eslovénia": "slovenia",
-        "romenia": "romania", "roménia": "romania"
+        "romenia": "romania", "roménia": "romania",
+        "noruega": "norway", "cabo verde": "cape verde", "cabo_verde": "cape verde"
     }
     for k, v in traducoes_busca.items():
         nome = nome.replace(k, v)
@@ -518,7 +523,7 @@ async def obter_incidentes_api(session, event_id):
                         
                         # Filtro de segurança para garantir que temos uma lista válida
                         if isinstance(incidents, list) and len(incidents) > 0:
-                            # Ordenar de forma ascendente por tempo de jogo
+                            # Nova ordenação de forma ascendente por tempo de jogo
                             try:
                                 incidents = sorted(incidents, key=lambda x: x.get("time", 0))
                             except:
@@ -713,6 +718,7 @@ async def gerar_agenda_selecao(canal_ou_ctx, nome_selecao):
         msg = await canal_ou_ctx.send(f"🚀 A procurar calendário para **{nome_selecao}**...")
         
     jogos_csv = carregar_calendario_hibrido()
+    # Filtra os jogos do CSV onde a seleção joga (Casa ou Fora)
     jogos_filtrados = [j for j in jogos_csv if equipa_no_jogo(nome_selecao, j["jogo"])]
     
     if not jogos_filtrados:
@@ -1029,6 +1035,7 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
             color=0x2ecc71
         )
         
+        # Estruturas para as partes do jogo (Cronologia Dividida)
         parte_1 = []
         parte_2 = []
         prolongamento = []
@@ -1037,12 +1044,14 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
         cod_fora = obter_codigo_selecao(fora)
         
         for inc in incidents:
+            # Varredura inteligente de chaves (incidentType vs type)
             inc_type = (inc.get("incidentType") or inc.get("type") or "").lower()
             time_val = inc.get('time', 0)
             tempo = f"{time_val}'"
             if inc.get("addedTime"):
                 tempo = f"{time_val}+{inc.get('addedTime')}'"
                 
+            # Identificação estrita da equipa (isHome / home / isHomeTeam)
             is_home = inc.get("isHome")
             if is_home is None:
                 is_home = inc.get("home")
@@ -1052,6 +1061,7 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
             cod_equipa = cod_casa if is_home else cod_fora
             emoji_equipa = "🟢" if is_home else "🔵"
             
+            # Parsing robusto do jogador envolvido
             p_obj = inc.get("player")
             if isinstance(p_obj, dict):
                 player_name = p_obj.get("name") or p_obj.get("shortName") or "Jogador"
@@ -1073,6 +1083,7 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                     emoji = "❌"
                     detalhe = "Auto-Golo"
                     
+                # Parsing robusto do jogador da assistência
                 assist_obj = inc.get("assist")
                 assist_name = None
                 if isinstance(assist_obj, dict):
@@ -1114,6 +1125,7 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                     
                 evento_linha = f"{emoji_equipa} **[{cod_equipa}]** `{tempo:<5}` 🔄 *{player_out}* ➡️ *{player_in}*"
             
+            # Distribuir os eventos pelas respetivas metades cronológicas
             if evento_linha:
                 if time_val <= 45:
                     parte_1.append(evento_linha)
@@ -1122,6 +1134,7 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                 else:
                     prolongamento.append(evento_linha)
         
+        # Função auxiliar estrita de formatação de limite seguro de 1024 caracteres
         def formatar_parte(lista_eventos):
             if not lista_eventos:
                 return "🏟️ *Sem incidentes registados nesta parte.*"
@@ -1136,6 +1149,7 @@ async def detalhes(ctx, *, equipas_pesquisa: str):
                     texto = item
             return texto
             
+        # Adicionar as metades separadas cronologicamente ao Embed
         embed.add_field(name="⏱️ 1ª PARTE", value=formatar_parte(parte_1), inline=False)
         embed.add_field(name="⏱️ 2ª PARTE", value=formatar_parte(parte_2), inline=False)
         if prolongamento:
@@ -1183,42 +1197,75 @@ async def bracket(ctx, *, fase_filtro: str = None):
             
     # Determinar qual a fase a mostrar
     fase_alvo = None
-    if fase_filtro:
-        fase_filtro_simp = simplificar_nome_busca(fase_filtro)
-        if any(x in fase_filtro_simp for x in ["32", "1/16", "trinta"]):
-            fase_alvo = "32 avos de final"
-        elif any(x in fase_filtro_simp for x in ["16", "1/8", "oitav"]):
-            fase_alvo = "Oitavos de final"
-        elif any(x in fase_filtro_simp for x in ["8", "1/4", "quart"]):
-            fase_alvo = "Quartos de final"
-        elif any(x in fase_filtro_simp for x in ["4", "1/2", "meia"]):
-            fase_alvo = "Meias-finais"
-        elif any(x in fase_filtro_simp for x in ["final", "f", "decis"]):
-            fase_alvo = "Final"
-        else:
-            return await ctx.send("❌ Fase inválida. Escolhe entre: `32`, `Oitavos`, `Quartos`, `Meias` ou `Final`.")
-    else:
-        # Por defeito escolhemos a primeira fase que tenha jogos por realizar ou em direto
-        for cat, lista in categorias.items():
-            if lista:
-                fase_alvo = cat
-                break
-        if not fase_alvo:
-            fase_alvo = "32 avos de final"
-            
-    jogos_fase = categorias.get(fase_alvo, [])
-    if not jogos_fase:
-        return await ctx.send(f"📅 Sem jogos agendados para a fase **{fase_alvo}** de momento.")
-        
-    embed = discord.Embed(
-        title=f"🏆 Árvore do Mundial — {fase_alvo.upper()}",
-        description="Acompanha o caminho rumo ao topo do mundo! 🌟",
-        color=0xe74c3c
-    )
     
+    # Sincronizar dinamicamente com os estados da API para autodetetar a fase activa actual por defeito!
     async with aiohttp.ClientSession() as session:
         season_id = await obter_season_id(session)
         eventos_api = await obter_resultados_api(session, season_id)
+        
+        if not fase_filtro:
+            fase_ordem = ["32 avos de final", "Oitavos de final", "Quartos de final", "Meias-finais", "Final"]
+            for f_nome in fase_ordem:
+                jogos_da_fase = categorias.get(f_nome, [])
+                tem_jogo_pendente = False
+                for j_csv in jogos_da_fase:
+                    # Se já houver golos locais, este já foi preenchido
+                    if j_csv.get("golos_casa") is not None and j_csv.get("golos_fora") is not None:
+                        continue
+                        
+                    nome_jogo = j_csv["jogo"]
+                    partes = [p.strip() for p in re.split(r'\s+(?:[xX]|vs)\s+', nome_jogo)]
+                    match_api = None
+                    if len(partes) == 2:
+                        casa_tr = traduzir_nome_equipa(partes[0])
+                        fora_tr = traduzir_nome_equipa(partes[1])
+                        for ev in eventos_api:
+                            api_casa = ev.get("homeTeam", {}).get("name", "")
+                            api_fora = ev.get("awayTeam", {}).get("name", "")
+                            if equipas_correspondem(casa_tr, fora_tr, api_casa, api_fora):
+                                match_api = ev
+                                break
+                    
+                    if match_api:
+                        status_type = match_api.get("status", {}).get("type", "")
+                        if status_type != "finished":
+                            tem_jogo_pendente = True
+                            break
+                    else:
+                        # Se não estiver na API e não tiver golos inseridos à mão, está pendente de realização!
+                        tem_jogo_pendente = True
+                        break
+                
+                if tem_jogo_pendente:
+                    fase_alvo = f_nome
+                    break
+                    
+            if not fase_alvo:
+                fase_alvo = "Final"
+        else:
+            fase_filtro_simp = simplificar_nome_busca(fase_filtro)
+            if any(x in fase_filtro_simp for x in ["32", "1/16", "trinta"]):
+                fase_alvo = "32 avos de final"
+            elif any(x in fase_filtro_simp for x in ["16", "1/8", "oitav"]):
+                fase_alvo = "Oitavos de final"
+            elif any(x in fase_filtro_simp for x in ["8", "1/4", "quart"]):
+                fase_alvo = "Quartos de final"
+            elif any(x in fase_filtro_simp for x in ["4", "1/2", "meia"]):
+                fase_alvo = "Meias-finais"
+            elif any(x in fase_filtro_simp for x in ["final", "f", "decis"]):
+                fase_alvo = "Final"
+            else:
+                return await ctx.send("❌ Fase inválida. Escolhe entre: `32`, `Oitavos`, `Quartos`, `Meias` ou `Final`.")
+                
+        jogos_fase = categorias.get(fase_alvo, [])
+        if not jogos_fase:
+            return await ctx.send(f"📅 Sem jogos agendados para a fase **{fase_alvo}** de momento.")
+            
+        embed = discord.Embed(
+            title=f"🏆 Árvore do Mundial — {fase_alvo.upper()}",
+            description="Acompanha o caminho rumo ao topo do mundo! 🌟",
+            color=0xe74c3c
+        )
         
         linhas_jogos = []
         for j_csv in jogos_fase:
